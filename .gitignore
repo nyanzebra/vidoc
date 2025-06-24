@@ -1,0 +1,19 @@
+/target
+
+/test_imgs
+
+*.png
+*.mp4
+*.raw
+*.y4m
+*.ppm
+*.exe
+*.pdb
+*.xz
+
+# Coverage files
+*.profraw
+*.profdata
+cobertura.xml
+lcov.info
+tarpaulin-report.html
