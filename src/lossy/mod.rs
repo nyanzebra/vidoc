@@ -1,4 +1,4 @@
-use std::ops::AddAssign;
+use std::{ops::AddAssign, sync::Arc};
 
 use num_traits::{Bounded, FromPrimitive, NumCast, Signed, ToPrimitive};
 use rayon::{
@@ -20,7 +20,27 @@ pub mod frame;
 pub mod jpg;
 
 #[derive(Clone)]
-pub struct SubSampleBlockGroup<T> {
+pub struct SubSampleBlockGroup<T>(Arc<SubSampleBlockGroupInner<T>>);
+
+impl<T> SubSampleBlockGroup<T> {
+    pub fn new(
+        dimensions: BlockDimensions,
+        subsampling: Subsampling,
+        y: Vec<Block<T>>,
+        cb: Vec<Block<T>>,
+        cr: Vec<Block<T>>,
+    ) -> Self {
+        Self(Arc::new(SubSampleBlockGroupInner {
+            dimensions,
+            subsampling,
+            y,
+            cb,
+            cr,
+        }))
+    }
+}
+
+struct SubSampleBlockGroupInner<T> {
     pub dimensions: BlockDimensions,
     pub subsampling: Subsampling,
     pub y: Vec<Block<T>>,
@@ -64,17 +84,39 @@ where
         T: Send + Sync,
         U: Copy + Default + NumCast + Send + Sync + 'static,
     {
-        SubSampleBlockGroup {
-            dimensions: self.dimensions,
-            subsampling: self.subsampling,
-            y: self.y.par_iter().map(|block| block.convert_to()).collect(),
-            cb: self.cb.par_iter().map(|block| block.convert_to()).collect(),
-            cr: self.cr.par_iter().map(|block| block.convert_to()).collect(),
-        }
+        SubSampleBlockGroup(Arc::new(SubSampleBlockGroupInner {
+            dimensions: self.0.dimensions,
+            subsampling: self.0.subsampling,
+            y: self
+                .0
+                .y
+                .par_iter()
+                .map(|block| block.convert_to())
+                .collect(),
+            cb: self
+                .0
+                .cb
+                .par_iter()
+                .map(|block| block.convert_to())
+                .collect(),
+            cr: self
+                .0
+                .cr
+                .par_iter()
+                .map(|block| block.convert_to())
+                .collect(),
+        }))
     }
 }
 
 impl<T> SubSampleBlockGroup<T> {
+    pub fn as_ref(&self) -> SubSampleBlockGroupRef<'_, T> {
+        let me = &*self.0;
+        me.as_ref()
+    }
+}
+
+impl<T> SubSampleBlockGroupInner<T> {
     pub fn as_ref(&self) -> SubSampleBlockGroupRef<'_, T> {
         SubSampleBlockGroupRef {
             dimensions: self.dimensions,
@@ -152,13 +194,13 @@ pub fn subsample_into_block_ycbcr(
         .map(|&(r, c)| build_block(&cr, r, c, chroma_width))
         .collect();
 
-    SubSampleBlockGroup {
+    SubSampleBlockGroup(Arc::new(SubSampleBlockGroupInner {
         dimensions: dimensions.into(),
         subsampling,
         y: y_blocks,
         cb: cb_blocks,
         cr: cr_blocks,
-    }
+    }))
 }
 
 #[inline]

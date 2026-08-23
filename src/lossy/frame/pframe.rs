@@ -2,18 +2,19 @@ use std::io::{Read, Write};
 
 use rayon::prelude::*;
 
-use super::{
-    build_predicted_blocks, calculate_residuals_for_macroblock, compressed_motion_vectors,
-    motion_vector::MotionVector,
-    r#macro::{PMacroBlock, PMacroBlocks, Prediction},
-    reassemble_frame,
-};
 use crate::{
     block::Block,
     dimensions::BlockDimensions,
     lossy::{frame::motion_vector::depth16, SubSampleBlockGroup, SubSampleBlockGroupRef},
     point::Point,
     BitStreamReader, BitStreamWriter, Decodable, Encodable, Result,
+};
+
+use super::{
+    build_predicted_blocks, calculate_residuals_for_macroblock, compressed_motion_vectors,
+    motion_vector::MotionVector,
+    r#macro::{PMacroBlock, PMacroBlocks, Prediction},
+    reassemble_frame,
 };
 
 pub struct PFrame<'a, T> {
@@ -54,39 +55,40 @@ impl PFrame<'_, i16> {
         let motion_vecs = self.motion_vectors(&self.current.dimensions, self.previous.y);
         let compressed = compressed_motion_vectors(&motion_vecs, &self.current.dimensions);
 
-        let mut macroblocks = Vec::new();
-        for ((prediction, _score), location) in compressed {
-            // P-frames always use Backward prediction (mv from previous frame)
-            let mv = match prediction {
-                Prediction::Backward(mv) => mv,
-                _ => unreachable!("P-frames should only have Backward prediction"),
-            };
+        // build_predicted_blocks and calculate_residuals_for_macroblock are pure
+        // functions of their inputs — parallelize across macroblocks.
+        compressed
+            .into_par_iter()
+            .map(|((prediction, _score), location)| {
+                let mv = match prediction {
+                    Prediction::Backward(mv) => mv,
+                    _ => unreachable!("P-frames should only have Backward prediction"),
+                };
 
-            let (predicted_y, predicted_cb, predicted_cr) = build_predicted_blocks(
-                &location,
-                &prediction,
-                &self.current.dimensions,
-                self.current.subsampling,
-                None,
-                &self.previous,
-            );
+                let (predicted_y, predicted_cb, predicted_cr) = build_predicted_blocks(
+                    &location,
+                    &prediction,
+                    &self.current.dimensions,
+                    self.current.subsampling,
+                    None,
+                    &self.previous,
+                );
 
-            let residuals = calculate_residuals_for_macroblock(
-                &location,
-                &self.current,
-                &predicted_y,
-                &predicted_cb,
-                &predicted_cr,
-            );
+                let residuals = calculate_residuals_for_macroblock(
+                    &location,
+                    &self.current,
+                    &predicted_y,
+                    &predicted_cb,
+                    &predicted_cr,
+                );
 
-            macroblocks.push(PMacroBlock {
-                location,
-                mv,
-                residuals,
-            });
-        }
-
-        macroblocks
+                PMacroBlock {
+                    location,
+                    mv,
+                    residuals,
+                }
+            })
+            .collect()
     }
 
     fn motion_vectors(

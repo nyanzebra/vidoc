@@ -219,11 +219,20 @@ where
     let raw: Vec<u8> = decode_raw(stream)?;
     let mut start = 0;
     let item_size = std::mem::size_of::<T>();
-    let mut res = Vec::with_capacity(if item_size > 0 { raw.len() / item_size } else { 0 });
+    let mut res = Vec::with_capacity(if item_size > 0 {
+        raw.len() / item_size
+    } else {
+        0
+    });
     while start < raw.len() {
         let (block, end) = T::from_bytes(&raw[start..]);
-        debug_assert_ne!(end, 0, "from_bytes returned zero advance — infinite loop risk");
-        if end == 0 { break; }
+        debug_assert_ne!(
+            end, 0,
+            "from_bytes returned zero advance — infinite loop risk"
+        );
+        if end == 0 {
+            break;
+        }
         res.push(block);
         start += end;
     }

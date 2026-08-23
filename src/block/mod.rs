@@ -4,7 +4,7 @@ use std::{
     ops::{Add, AddAssign, Div, DivAssign, Index, IndexMut, Mul, Sub},
 };
 
-use num_traits::{NumCast, Signed, ToPrimitive};
+use num_traits::{Bounded, NumCast, Signed, ToPrimitive};
 
 use crate::{
     bitstream::{BitStreamReader, BitStreamWriter},
@@ -332,6 +332,24 @@ where
         let mut sum = T::default();
         for idx in 0..BLOCK_SIZE {
             sum += (self[idx] - other[idx]).abs();
+        }
+        sum
+    }
+
+    /// SAD with early termination against a caller-supplied threshold.
+    /// Returns as soon as `sum >= threshold`, avoiding the rest of the 64
+    /// element loop when this candidate is already worse than the current best.
+    /// Pass `T::max_value()` if no current best is known.
+    pub fn sum_of_abs_difference_early_exit(&self, other: &Block<T>, threshold: T) -> T
+    where
+        T: Bounded + PartialOrd,
+    {
+        let mut sum = T::default();
+        for idx in 0..BLOCK_SIZE {
+            sum += (self[idx] - other[idx]).abs();
+            if sum >= threshold {
+                return threshold;
+            }
         }
         sum
     }

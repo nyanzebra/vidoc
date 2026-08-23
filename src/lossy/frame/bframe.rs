@@ -87,40 +87,42 @@ impl BFrame<'_, i16> {
         let motion_vecs = self.motion_vectors();
         let compressed = compressed_motion_vectors(&motion_vecs, &self.dimensions());
 
-        let mut macroblocks = Vec::new();
-        for ((prediction, _score), location) in compressed {
-            let (predicted_y, predicted_cb, predicted_cr) = build_predicted_blocks(
-                &location,
-                &prediction,
-                &self.current.dimensions,
-                self.current.subsampling,
-                self.forward_ref.as_ref(),
-                &self.backward_ref,
-            );
+        // build_predicted_blocks and calculate_residuals_for_macroblock are pure
+        // functions of their inputs — parallelize across macroblocks.
+        compressed
+            .into_par_iter()
+            .map(|((prediction, _score), location)| {
+                let (predicted_y, predicted_cb, predicted_cr) = build_predicted_blocks(
+                    &location,
+                    &prediction,
+                    &self.current.dimensions,
+                    self.current.subsampling,
+                    self.forward_ref.as_ref(),
+                    &self.backward_ref,
+                );
 
-            let residuals = calculate_residuals_for_macroblock(
-                &location,
-                &self.current,
-                &predicted_y,
-                &predicted_cb,
-                &predicted_cr,
-            );
+                let residuals = calculate_residuals_for_macroblock(
+                    &location,
+                    &self.current,
+                    &predicted_y,
+                    &predicted_cb,
+                    &predicted_cr,
+                );
 
-            macroblocks.push(BMacroBlock {
-                location,
-                prediction,
-                residuals,
-            });
-        }
-
-        macroblocks
+                BMacroBlock {
+                    location,
+                    prediction,
+                    residuals,
+                }
+            })
+            .collect()
     }
 
     fn motion_vectors(&self) -> Vec<Vec<(Prediction, i16)>> {
         let dimensions = self.dimensions();
-        let current_y = self.current.y;
-        let forward_y = self.forward_ref.as_ref().map(|f| f.y);
-        let backward_y = self.backward_ref.y;
+        let current_y = &self.current.y;
+        let forward_y = self.forward_ref.as_ref().map(|f| &f.y);
+        let backward_y = &self.backward_ref.y;
 
         (0..dimensions.height)
             .into_par_iter()
@@ -132,7 +134,7 @@ impl BFrame<'_, i16> {
                             let current = &current_y[idx];
                             let point = Point { row, col };
 
-                            let (forward_mv, forward_cost) = if let Some(forward_ref) = forward_y {
+                            let (forward_mv, forward_cost) = if let Some(forward_ref) = forward_y.as_ref() {
                                 depth16::ldsp_blocks(current, forward_ref, &dimensions, point)
                             } else {
                                 // No forward reference - use zero MV with high cost
@@ -207,12 +209,12 @@ impl BFrame<'_, i16> {
         backward_mv: MotionVector,
     ) -> i16 {
         let dimensions = self.dimensions();
-        let backward_y = self.backward_ref.y;
+        let backward_y = &self.backward_ref.y;
         let backward_idx = mv_idx(point, backward_mv, &dimensions);
 
         // Check if we have a forward reference
         if let Some(forward_ref) = self.forward_ref.as_ref() {
-            let forward_y = forward_ref.y;
+            let forward_y = &forward_ref.y;
             let forward_idx = mv_idx(point, forward_mv, &dimensions);
 
             if forward_idx >= forward_y.len() || backward_idx >= backward_y.len() {
@@ -284,20 +286,20 @@ mod tests {
             backward_ref.as_ref(),
         );
 
-        assert_eq!(bframe.dimensions(), current.dimensions);
-        assert_eq!(bframe.current.y.len(), current.y.len());
+        assert_eq!(bframe.dimensions(), current.as_ref().dimensions);
+        assert_eq!(bframe.current.y.len(), current.as_ref().y.len());
 
         // Test motion vector calculation
         let mvs = bframe.motion_vectors();
-        assert_eq!(mvs.len(), current.dimensions.height);
+        assert_eq!(mvs.len(), current.as_ref().dimensions.height);
         if !mvs.is_empty() {
-            assert_eq!(mvs[0].len(), current.dimensions.width);
+            assert_eq!(mvs[0].len(), current.as_ref().dimensions.width);
         }
 
         // Test bidirectional cost calculation
-        if !current.y.is_empty() {
+        if !current.as_ref().y.is_empty() {
             let cost = bframe.calculate_bidirectional_cost(
-                &current.y[0],
+                &current.as_ref().y[0],
                 Point { row: 0, col: 0 },
                 MotionVector { x: 0, y: 0 },
                 MotionVector { x: 0, y: 0 },

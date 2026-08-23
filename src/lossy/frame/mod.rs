@@ -1,6 +1,7 @@
 use std::{
     cmp::{max, PartialOrd},
     ops::{AddAssign, DivAssign, MulAssign},
+    sync::OnceLock,
 };
 
 use crate::{
@@ -311,7 +312,8 @@ pub(crate) fn build_predicted_blocks(
     backward_ref: &SubSampleBlockGroupRef<i16>,
 ) -> PredictedBlocks {
     let BlockLocation { start, end } = location;
-    let mut predicted_y = Vec::new();
+    let luma_count = (end.row - start.row + 1) * (end.col - start.col + 1);
+    let mut predicted_y = Vec::with_capacity(luma_count);
 
     // Extract Y channel slices for easier access
     let forward_y = forward_ref.map(|f| f.y);
@@ -329,12 +331,17 @@ pub(crate) fn build_predicted_blocks(
     // Build predicted chroma blocks
     let chroma_dims = dimensions.subsample(subsampling);
 
-    let mut predicted_cb = Vec::new();
-    let mut predicted_cr = Vec::new();
+    // Pre-size: chroma blocks are at most (luma_blocks / chroma_ratio)
+    let luma_blocks = (end.row - start.row + 1) * (end.col - start.col + 1);
+    let mut predicted_cb = Vec::with_capacity(luma_blocks / 4 + 1);
+    let mut predicted_cr = Vec::with_capacity(luma_blocks / 4 + 1);
 
-    // Track which chroma blocks we've already processed to avoid duplicates
-    use std::collections::HashSet;
-    let mut processed_chroma_blocks = HashSet::new();
+    // Use a small stack-allocated bitset instead of HashSet — avoids heap allocation.
+    // Macroblocks span at most a few rows/cols so a fixed 32x32 bool array is safe.
+    let chroma_start_r = start.row / 2;
+    let chroma_start_c = start.col / 2;
+    // Stack-allocate a small processed table (max macroblock spans a handful of chroma blocks)
+    let mut processed_chroma_blocks = [[false; 32]; 32];
 
     for r in start.row..=end.row {
         for c in start.col..=end.col {
@@ -348,9 +355,12 @@ pub(crate) fn build_predicted_blocks(
                 _ => c,
             };
 
-            if !processed_chroma_blocks.insert((chroma_r, chroma_c)) {
+            let local_r = chroma_r.saturating_sub(chroma_start_r).min(31);
+            let local_c = chroma_c.saturating_sub(chroma_start_c).min(31);
+            if processed_chroma_blocks[local_r][local_c] {
                 continue;
             }
+            processed_chroma_blocks[local_r][local_c] = true;
 
             // Use the helper to predict chroma blocks
             let pred_cb = predicted_chroma_block(
@@ -399,9 +409,10 @@ pub(crate) fn calculate_residuals_for_macroblock(
     let quantizor_y = Q_Y.get_or_init(Quantizor::<f64>::video_luminance);
     let quantizor_chroma = Q_C.get_or_init(Quantizor::<f64>::video_chrominance);
 
-    let mut y_residuals = Vec::new();
+    let luma_count = (end.row - start.row + 1) * (end.col - start.col + 1);
+    let mut y_residuals = Vec::with_capacity(luma_count);
 
-    // Calculate luma residuals
+    // Calculate luma residuals — single pass, pre-sized
     let mut pred_idx = 0;
     for r in start.row..=end.row {
         for c in start.col..=end.col {
@@ -670,13 +681,13 @@ pub(crate) fn reassemble_frame<MB: r#macro::AssemblableMacroBlock>(
         }
     }
 
-    Ok(SubSampleBlockGroup {
-        dimensions: *dimensions,
-        subsampling: *subsampling,
-        y: y_blocks,
-        cb: cb_blocks,
-        cr: cr_blocks,
-    })
+    Ok(SubSampleBlockGroup::new(
+        *dimensions,
+        *subsampling,
+        y_blocks,
+        cb_blocks,
+        cr_blocks,
+    ))
 }
 
 pub(crate) fn compressed_motion_vectors(

@@ -7,7 +7,6 @@ use std::{
 
 use rayon::prelude::*;
 
-use super::{bframe::BFrame, iframe::IFrame, pframe::PFrame};
 use crate::{
     color::Subsampling,
     dimensions::PixelDimensions,
@@ -16,10 +15,12 @@ use crate::{
             r#macro::{BMacroBlock, PMacroBlock},
             Kind,
         },
-        SubSampleBlockGroup,
+        SubSampleBlockGroup, SubSampleBlockGroupRef,
     },
     BitStreamReader, BitStreamWriter, Decodable, Encodable, Error, Result,
 };
+
+use super::{bframe::BFrame, iframe::IFrame, pframe::PFrame};
 
 /// A decoded frame with its type information
 pub struct DecodedFrame {
@@ -572,7 +573,7 @@ where
                         break;
                     }
 
-                    if self.detect_scene_change(&frames[0], &frame) {
+                    if self.detect_scene_change(frames[0].as_ref(), frame.as_ref()) {
                         self.buffered_frame = Some(frame);
                         break;
                     }
@@ -613,6 +614,7 @@ where
 
         // Pass 1: Encode and reconstruct all I/P anchor frames
         for (idx, frame) in frames.iter().enumerate() {
+            let frame = frame.as_ref();
             let frame_pos = start_pos + idx;
             let kind = if frame_pos % self.ordering.full_image_distance == 0 {
                 Kind::I
@@ -637,7 +639,7 @@ where
 
                 match kind {
                     Kind::I => {
-                        let iframe = IFrame::new(frame.as_ref());
+                        let iframe = IFrame::new(frame);
                         iframe.encode(&mut temp_writer)?;
                         temp_writer.align_to_byte()?;
                         temp_writer.flush()?;
@@ -650,21 +652,7 @@ where
                         let reconstructed_f64 = <IFrame<i16> as Decodable>::decode(&mut reader)?;
 
                         // Convert from f64 to i16
-                        let reconstructed = SubSampleBlockGroup {
-                            y: reconstructed_f64.y.iter().map(|b| b.convert_to()).collect(),
-                            cb: reconstructed_f64
-                                .cb
-                                .iter()
-                                .map(|b| b.convert_to())
-                                .collect(),
-                            cr: reconstructed_f64
-                                .cr
-                                .iter()
-                                .map(|b| b.convert_to())
-                                .collect(),
-                            dimensions: reconstructed_f64.dimensions,
-                            subsampling: reconstructed_f64.subsampling,
-                        };
+                        let reconstructed = reconstructed_f64.convert_to::<i16>();
 
                         self.last_iframe = Some(reconstructed.clone());
                         reconstructed_anchors.push(reconstructed);
@@ -681,7 +669,7 @@ where
                         let anchor_idx = backward_local_idx / self.ordering.anchor_distance;
                         let backward_ref = &reconstructed_anchors[anchor_idx];
 
-                        let pframe = PFrame::new(frame.as_ref(), backward_ref.as_ref());
+                        let pframe = PFrame::new(frame, backward_ref.as_ref());
                         let macroblocks = pframe.get_macroblocks();
 
                         pframe.encode(&mut temp_writer)?;
@@ -706,6 +694,7 @@ where
             .par_iter()
             .enumerate()
             .filter_map(|(idx, frame)| {
+                let frame = frame.as_ref();
                 let frame_pos = start_pos + idx;
                 let kind = if frame_pos % self.ordering.full_image_distance == 0 {
                     Kind::I
@@ -768,7 +757,7 @@ where
                 };
 
                 let bframe = BFrame::new(
-                    frame.as_ref(),
+                    frame,
                     forward_ref.map(|f| f.as_ref()),
                     backward_ref.as_ref(),
                 );
@@ -797,10 +786,7 @@ where
         // Pass 3: Write all frames in display order
         encoded_frames.sort_by_key(|(idx, _, _)| *idx);
         for (_idx, _kind, data) in encoded_frames {
-            // Write raw bytes directly to the sink
-            for byte in data {
-                stream.write(byte)?;
-            }
+            stream.write_all_bytes(&data)?;
         }
 
         Ok(())
@@ -808,14 +794,14 @@ where
 
     fn detect_scene_change(
         &self,
-        reference: &SubSampleBlockGroup<i16>,
-        current: &SubSampleBlockGroup<i16>,
+        reference: SubSampleBlockGroupRef<'_, i16>,
+        current: SubSampleBlockGroupRef<'_, i16>,
     ) -> bool {
         if reference.dimensions != current.dimensions {
             return true;
         }
 
-        let sad = reference.as_ref().sum_of_abs_difference(current.as_ref());
+        let sad = reference.sum_of_abs_difference(current);
         let total_pixels = (reference.dimensions.width * reference.dimensions.height) as i64;
         let avg_diff = sad / total_pixels;
 
@@ -870,14 +856,14 @@ where
 
     fn detect_scene_change(
         &self,
-        reference: &SubSampleBlockGroup<i16>,
-        current: &SubSampleBlockGroup<i16>,
+        reference: SubSampleBlockGroupRef<'_, i16>,
+        current: SubSampleBlockGroupRef<'_, i16>,
     ) -> bool {
         if reference.dimensions != current.dimensions {
             return true;
         }
 
-        let sad = reference.as_ref().sum_of_abs_difference(current.as_ref());
+        let sad = reference.sum_of_abs_difference(current);
         let total_pixels = (reference.dimensions.width * reference.dimensions.height) as i64;
         let avg_diff = sad / total_pixels;
 
@@ -903,7 +889,7 @@ where
         while let Some(frame) = self.content.read_frame()? {
             // Check for scene change
             if let Some(ref prev_frame) = last_frame_for_scene_detect {
-                if self.detect_scene_change(prev_frame, &frame) {
+                if self.detect_scene_change(prev_frame.as_ref(), frame.as_ref()) {
                     frame_position = 0;
                 }
             }
@@ -916,8 +902,8 @@ where
 
             // Encode the frame header
             GroupOfPicturesHeader::Frame {
-                subsampling: frame.subsampling,
-                dimensions: frame.dimensions.into(),
+                subsampling: frame.as_ref().subsampling,
+                dimensions: frame.as_ref().dimensions.into(),
                 kind,
             }
             .encode(stream)?;
@@ -1012,13 +998,13 @@ mod tests {
             }
         }
 
-        SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![block; width * height],
-            cb: vec![Block::<i16>::default(); width * height / 4],
-            cr: vec![Block::<i16>::default(); width * height / 4],
-        }
+        SubSampleBlockGroup::new(
+            BlockDimensions { width, height },
+            Subsampling::Sample420,
+            vec![block; width * height],
+            vec![Block::<i16>::default(); width * height / 4],
+            vec![Block::<i16>::default(); width * height / 4],
+        )
     }
 
     // Helper to create a frame with gradient pattern
@@ -1045,19 +1031,19 @@ mod tests {
             }
         }
 
-        SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: y_blocks,
-            cb: vec![Block::<i16>::default(); width * height / 4],
-            cr: vec![Block::<i16>::default(); width * height / 4],
-        }
+        SubSampleBlockGroup::new(
+            BlockDimensions { width, height },
+            Subsampling::Sample420,
+            y_blocks,
+            vec![Block::<i16>::default(); width * height / 4],
+            vec![Block::<i16>::default(); width * height / 4],
+        )
     }
 
     // Helper to calculate MSE (Mean Squared Error) between two frames
     fn calculate_mse(
-        original: &SubSampleBlockGroup<i16>,
-        reconstructed: &SubSampleBlockGroup<i16>,
+        original: SubSampleBlockGroupRef<'_, i16>,
+        reconstructed: SubSampleBlockGroupRef<'_, i16>,
     ) -> f64 {
         assert_eq!(
             original.y.len(),

@@ -50,7 +50,7 @@ use vidoc::{
         frame::gop::{
             DecodedFrame, FrameReader, GroupOfPicturesReader, GroupOfPicturesWriter, Ordering,
         },
-        SubSampleBlockGroup,
+        SubSampleBlockGroup, SubSampleBlockGroupRef,
     },
 };
 
@@ -330,7 +330,12 @@ fn play_in_window(
                 last_frame_time = Instant::now();
 
                 let decode_start = Instant::now();
-                frame_to_rgb_buffer_inplace(&decoded_frame.data, width, height, &mut buffer);
+                frame_to_rgb_buffer_inplace(
+                    &decoded_frame.data.as_ref(),
+                    width,
+                    height,
+                    &mut buffer,
+                );
                 decode_time += decode_start.elapsed().as_secs_f64();
 
                 let window_start = Instant::now();
@@ -386,7 +391,7 @@ fn play_in_window(
 
 /// Convert frame to RGB buffer in-place (avoids allocation)
 fn frame_to_rgb_buffer_inplace(
-    frame: &SubSampleBlockGroup<i16>,
+    frame: &SubSampleBlockGroupRef<'_, i16>,
     width: usize,
     height: usize,
     buffer: &mut [u32],
@@ -416,6 +421,16 @@ fn frame_to_rgb_buffer_inplace(
     });
 }
 
+// Drop-in replacement for y4m_frame_to_subsample in examples/video_player.rs
+//
+// Key changes vs original:
+//  1. LUTs computed once per call (not per pixel) for the limited→full range conversion
+//  2. Direct flat-index writes into block.0[] instead of block.set(r, c, value)
+//  3. Rayon parallel_iter over block rows for both luma and chroma
+//  4. Edge blocks (touching the right/bottom boundary) handled separately,
+//     so interior blocks have zero branches in the hot path
+//  5. Chroma Cb/Cr built in a single pass (was two separate loops)
+
 fn y4m_frame_to_subsample(
     frame: y4m::Frame,
     width: usize,
@@ -426,97 +441,125 @@ fn y4m_frame_to_subsample(
     let u_plane = frame.get_u_plane();
     let v_plane = frame.get_v_plane();
 
-    // Luma blocks (full resolution)
     let block_width = width.div_ceil(8);
     let block_height = height.div_ceil(8);
-    let total_y_blocks = block_width * block_height;
 
-    // For 4:2:0, chroma is half resolution in both dimensions
     let chroma_width = width.div_ceil(2);
     let chroma_height = height.div_ceil(2);
     let chroma_block_width = chroma_width.div_ceil(8);
     let chroma_block_height = chroma_height.div_ceil(8);
-    let total_chroma_blocks = chroma_block_width * chroma_block_height;
 
-    let mut y_blocks = Vec::with_capacity(total_y_blocks);
-    let mut cb_blocks = Vec::with_capacity(total_chroma_blocks);
-    let mut cr_blocks = Vec::with_capacity(total_chroma_blocks);
+    // -----------------------------------------------------------------------
+    // Precompute lookup tables once per frame (not per pixel).
+    //
+    // Y limited range [16, 235] → full range [0, 255]:
+    //   full = ((limited - 16) * 255 / 219).clamp(0, 255)
+    //
+    // U/V limited range [16, 240], center 128 → full range [0, 255], center 128:
+    //   full = (((limited - 128) * 255 / 112) + 128).clamp(0, 255)
+    // -----------------------------------------------------------------------
+    let y_lut: [i16; 256] =
+        std::array::from_fn(|i| (((i as f32 - 16.0) * 255.0 / 219.0).clamp(0.0, 255.0)) as i16);
+    let uv_lut: [i16; 256] = std::array::from_fn(|i| {
+        ((((i as f32 - 128.0) * 255.0 / 112.0) + 128.0).clamp(0.0, 255.0)) as i16
+    });
 
-    // Build Y blocks (full resolution)
-    for block_row in 0..block_height {
-        for block_col in 0..block_width {
-            let mut y_block = Block::<i16>::default();
+    // -----------------------------------------------------------------------
+    // Luma blocks — parallel over block rows
+    // -----------------------------------------------------------------------
+    let y_blocks: Vec<Block<i16>> = (0..block_height)
+        .into_par_iter()
+        .flat_map_iter(|block_row| {
+            let pixel_row_base = block_row * 8;
+            // How many pixel rows does this block row actually cover?
+            let row_count = 8.min(height - pixel_row_base);
 
-            for r in 0..8 {
-                for c in 0..8 {
-                    let pixel_y = block_row * 8 + r;
-                    let pixel_x = block_col * 8 + c;
+            (0..block_width).map(move |block_col| {
+                let pixel_col_base = block_col * 8;
+                let col_count = 8.min(width - pixel_col_base);
 
-                    if pixel_y < height && pixel_x < width {
-                        let y_idx = pixel_y * width + pixel_x;
-                        // Y4M typically uses limited range (16-235 for Y)
-                        // Convert to full range (0-255) that our codec expects
-                        let y_limited = y_plane[y_idx] as f64;
-                        let y_full = ((y_limited - 16.0) * 255.0 / 219.0).clamp(0.0, 255.0);
-                        y_block.set(r, c, y_full as i16);
+                let mut block = Block::<i16>::default();
+                let data = &mut block.0;
+
+                if row_count == 8 && col_count == 8 {
+                    // Interior block — no bounds checks needed
+                    for r in 0..8usize {
+                        let row_offset = (pixel_row_base + r) * width + pixel_col_base;
+                        for c in 0..8usize {
+                            data[r * 8 + c] = y_lut[y_plane[row_offset + c] as usize];
+                        }
                     }
-                }
-            }
-
-            y_blocks.push(y_block);
-        }
-    }
-
-    // Build Cb and Cr blocks (half resolution for 4:2:0)
-    for block_row in 0..chroma_block_height {
-        for block_col in 0..chroma_block_width {
-            let mut cb_block = Block::<i16>::default();
-            let mut cr_block = Block::<i16>::default();
-
-            for r in 0..8 {
-                for c in 0..8 {
-                    let chroma_y = block_row * 8 + r;
-                    let chroma_x = block_col * 8 + c;
-
-                    if chroma_y < chroma_height && chroma_x < chroma_width {
-                        let u_idx = chroma_y * chroma_width + chroma_x;
-                        if u_idx < u_plane.len() {
-                            // Y4M uses limited range (16-240 for U/V, centered at 128)
-                            // Our codec expects full range (0-255, centered at 128)
-                            // We need to preserve the center point at 128
-                            let u_limited = u_plane[u_idx] as f64;
-                            let v_limited = v_plane[u_idx] as f64;
-
-                            // Convert preserving center: map [16,240] to [0,255] with 128 staying
-                            // at 128 Formula: full = ((limited - 128) *
-                            // 255/224) + 128
-                            let u_full =
-                                (((u_limited - 128.0) * 255.0 / 112.0) + 128.0).clamp(0.0, 255.0);
-                            let v_full =
-                                (((v_limited - 128.0) * 255.0 / 112.0) + 128.0).clamp(0.0, 255.0);
-
-                            cb_block.set(r, c, u_full as i16);
-                            cr_block.set(r, c, v_full as i16);
+                } else {
+                    // Edge block — only fill valid pixels, rest stay 0
+                    for r in 0..row_count {
+                        let row_offset = (pixel_row_base + r) * width + pixel_col_base;
+                        for c in 0..col_count {
+                            data[r * 8 + c] = y_lut[y_plane[row_offset + c] as usize];
                         }
                     }
                 }
-            }
 
-            cb_blocks.push(cb_block);
-            cr_blocks.push(cr_block);
-        }
-    }
+                block
+            })
+        })
+        .collect();
 
-    Ok(SubSampleBlockGroup {
-        dimensions: BlockDimensions {
+    // -----------------------------------------------------------------------
+    // Chroma blocks — Cb and Cr in a single parallel pass
+    // -----------------------------------------------------------------------
+    let chroma_blocks: Vec<(Block<i16>, Block<i16>)> = (0..chroma_block_height)
+        .into_par_iter()
+        .flat_map_iter(|block_row| {
+            let pixel_row_base = block_row * 8;
+            let row_count = 8.min(chroma_height - pixel_row_base);
+
+            (0..chroma_block_width).map(move |block_col| {
+                let pixel_col_base = block_col * 8;
+                let col_count = 8.min(chroma_width - pixel_col_base);
+
+                let mut cb_block = Block::<i16>::default();
+                let mut cr_block = Block::<i16>::default();
+                let cb_data = &mut cb_block.0;
+                let cr_data = &mut cr_block.0;
+
+                if row_count == 8 && col_count == 8 {
+                    for r in 0..8usize {
+                        let row_offset = (pixel_row_base + r) * chroma_width + pixel_col_base;
+                        for c in 0..8usize {
+                            let idx = row_offset + c;
+                            cb_data[r * 8 + c] = uv_lut[u_plane[idx] as usize];
+                            cr_data[r * 8 + c] = uv_lut[v_plane[idx] as usize];
+                        }
+                    }
+                } else {
+                    for r in 0..row_count {
+                        let row_offset = (pixel_row_base + r) * chroma_width + pixel_col_base;
+                        for c in 0..col_count {
+                            let idx = row_offset + c;
+                            cb_data[r * 8 + c] = uv_lut[u_plane[idx] as usize];
+                            cr_data[r * 8 + c] = uv_lut[v_plane[idx] as usize];
+                        }
+                    }
+                }
+
+                (cb_block, cr_block)
+            })
+        })
+        .collect();
+
+    let (cb_blocks, cr_blocks): (Vec<Block<i16>>, Vec<Block<i16>>) =
+        chroma_blocks.into_iter().unzip();
+
+    Ok(SubSampleBlockGroup::new(
+        BlockDimensions {
             width: block_width,
             height: block_height,
         },
-        subsampling: Subsampling::Sample420,
-        y: y_blocks,
-        cb: cb_blocks,
-        cr: cr_blocks,
-    })
+        Subsampling::Sample420,
+        y_blocks,
+        cb_blocks,
+        cr_blocks,
+    ))
 }
 
 struct FrameSource {

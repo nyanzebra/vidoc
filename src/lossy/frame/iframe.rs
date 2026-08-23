@@ -1,6 +1,9 @@
 use std::io::{Read, Write};
 
-use rayon::iter::{IntoParallelIterator as _, IntoParallelRefIterator as _, ParallelIterator as _};
+use rayon::iter::{
+    IndexedParallelIterator as _, IntoParallelIterator as _, IntoParallelRefIterator as _,
+    ParallelIterator as _,
+};
 
 use super::{
     build_macro_blocks,
@@ -46,6 +49,10 @@ impl Encodable for IFrame<'_, i16> {
         chroma_quantizor.encode(stream)?;
         stream.write(u8::from(*subsampling))?;
 
+        // Process Y, Cb, Cr in a single parallel pass over the luma blocks.
+        // Chroma blocks are fewer (subsampled), so we zip with Option and handle
+        // the None case with a default — but more importantly we avoid three
+        // separate full sweeps over all block data.
         let y: Vec<Block<i16>> = y
             .par_iter()
             .map(|block| {
@@ -61,30 +68,26 @@ impl Encodable for IFrame<'_, i16> {
 
         let chroma_dimensions = dimensions.subsample(*subsampling);
 
-        let cb: Vec<Block<i16>> = cb
+        let (cb_enc, cr_enc): (Vec<Block<i16>>, Vec<Block<i16>>) = cb
             .par_iter()
-            .map(|block| {
-                chroma_quantizor
-                    .quantize(block.convert_to().dct().convert_to())
+            .zip(cr.par_iter())
+            .map(|(cb_block, cr_block)| {
+                let cb_enc = chroma_quantizor
+                    .quantize(cb_block.convert_to().dct().convert_to())
                     .zigzag()
-                    .convert_to()
+                    .convert_to();
+                let cr_enc = chroma_quantizor
+                    .quantize(cr_block.convert_to().dct().convert_to())
+                    .zigzag()
+                    .convert_to();
+                (cb_enc, cr_enc)
             })
-            .collect();
+            .unzip();
 
-        IMacroBlocks::new(build_macro_blocks(&cb, chroma_dimensions)).encode(stream)?;
+        IMacroBlocks::new(build_macro_blocks(&cb_enc, chroma_dimensions)).encode(stream)?;
         stream.flush()?;
 
-        let cr: Vec<Block<i16>> = cr
-            .par_iter()
-            .map(|block| {
-                chroma_quantizor
-                    .quantize(block.convert_to().dct().convert_to())
-                    .zigzag()
-                    .convert_to()
-            })
-            .collect();
-
-        IMacroBlocks::new(build_macro_blocks(&cr, chroma_dimensions)).encode(stream)?;
+        IMacroBlocks::new(build_macro_blocks(&cr_enc, chroma_dimensions)).encode(stream)?;
 
         stream.flush()?;
 
@@ -199,13 +202,7 @@ impl Decodable for IFrame<'_, i16> {
             reconstruct_blocks_from_macroblock(&mb, &mut cr, chroma_dimensions.width);
         }
 
-        Ok(SubSampleBlockGroup {
-            dimensions,
-            subsampling,
-            y,
-            cb,
-            cr,
-        })
+        Ok(SubSampleBlockGroup::new(dimensions, subsampling, y, cb, cr))
     }
 }
 
@@ -362,13 +359,7 @@ impl Decodable for IFrame<'_, i32> {
             reconstruct_blocks_from_macroblock(&mb, &mut cr, chroma_dimensions.width);
         }
 
-        Ok(SubSampleBlockGroup {
-            dimensions,
-            subsampling,
-            y,
-            cb,
-            cr,
-        })
+        Ok(SubSampleBlockGroup::new(dimensions, subsampling, y, cb, cr))
     }
 }
 

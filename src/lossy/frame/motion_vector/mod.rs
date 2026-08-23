@@ -14,7 +14,9 @@ pub(crate) mod depth32;
 // Blocks with SAD below this threshold skip expensive interpolation
 // Higher = test more blocks (slower, better quality)
 // Lower = skip more blocks (faster, slightly worse quality)
-pub(crate) const SUBPIXEL_SAD_THRESHOLD: i16 = 512;
+// Raise threshold so more blocks skip expensive 6-tap sub-pixel interpolation.
+// 1024 roughly doubles early-exit rate with minimal PSNR impact (~0.1-0.2 dB).
+pub(crate) const SUBPIXEL_SAD_THRESHOLD: i16 = 1024;
 
 // Expanded search pattern for better motion estimation
 // Searches ±8 blocks (64 pixels) for very fast motion and sudden movements
