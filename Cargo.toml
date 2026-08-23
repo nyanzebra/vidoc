@@ -3,7 +3,6 @@ name = "vidoc"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-authors = ["Robert Jang"]
 description = "A video and image codec library"
 repository = "https://github.com/nyanzebra/vidoc"
 keywords = ["video", "image", "codec", "compression", "encoding"]
@@ -13,7 +12,6 @@ categories = ["multimedia::video"]
 num-traits = "0.2"
 thiserror = "2.0.17"
 rayon = "1.11.0"
-num_cpus = "1.17"
 crossbeam-channel = "0.5"
 wide = "0.8.1"  # Portable SIMD operations
 
@@ -28,6 +26,9 @@ y4m = "0.8"
 minifb = "0.28.0"
 clap = { version = "4.5", features = ["derive"] }
 
+[profile.release]
+debug = false
+
 [profile.test]
 inherits = "release"
 
@@ -38,6 +39,3 @@ path = "examples/camera.rs"
 [[example]]
 name = "video_player"
 path = "examples/video_player.rs"
-
-[profile.release]
-debug = true

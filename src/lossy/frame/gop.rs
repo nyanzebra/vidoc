@@ -224,8 +224,8 @@ where
                                     // This ensures B-frames are returned before the P-frame
                                     self.decoded_frames.push_back((Kind::P, reconstructed));
 
-                                    // Return the first buffered frame (which will be a B-frame if there
-                                    // were any)
+                                    // Return the first buffered frame (which will be a B-frame if
+                                    // there were any)
                                     if let Some((kind, data)) = self.decoded_frames.pop_front() {
                                         Some(Ok(DecodedFrame { kind, data }))
                                     } else {
