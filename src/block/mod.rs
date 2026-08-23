@@ -161,13 +161,11 @@ where
 {
     type Output = Self;
 
+    #[inline]
     fn add(self, other: Self) -> Self {
         let mut next = self;
-        for r in 0..BLOCK_ROWS {
-            for c in 0..BLOCK_COLS {
-                let idx = r * BLOCK_COLS + c;
-                next[idx] = self[idx] + other[idx];
-            }
+        for idx in 0..BLOCK_SIZE {
+            next[idx] = self[idx] + other[idx];
         }
         next
     }
@@ -179,13 +177,11 @@ where
 {
     type Output = Self;
 
+    #[inline]
     fn sub(self, other: Self) -> Self {
         let mut next = self;
-        for r in 0..BLOCK_ROWS {
-            for c in 0..BLOCK_COLS {
-                let idx = r * BLOCK_COLS + c;
-                next[idx] = self[idx] - other[idx];
-            }
+        for idx in 0..BLOCK_SIZE {
+            next[idx] = self[idx] - other[idx];
         }
         next
     }
@@ -197,13 +193,11 @@ where
 {
     type Output = Self;
 
+    #[inline]
     fn div(self, other: T) -> Self {
         let mut next = self;
-        for r in 0..BLOCK_ROWS {
-            for c in 0..BLOCK_COLS {
-                let idx = r * BLOCK_COLS + c;
-                next[idx] /= other;
-            }
+        for idx in 0..BLOCK_SIZE {
+            next[idx] /= other;
         }
         next
     }
@@ -215,13 +209,11 @@ where
 {
     type Output = Self;
 
+    #[inline]
     fn div(self, other: Block<T>) -> Self {
         let mut next = self;
-        for r in 0..BLOCK_ROWS {
-            for c in 0..BLOCK_COLS {
-                let idx = r * BLOCK_COLS + c;
-                next[idx] = self[idx] / other[idx];
-            }
+        for idx in 0..BLOCK_SIZE {
+            next[idx] = self[idx] / other[idx];
         }
         next
     }
@@ -233,37 +225,13 @@ where
 {
     type Output = Self;
 
+    #[inline]
     fn mul(self, other: Block<T>) -> Self {
         let mut next = self;
-        for r in 0..BLOCK_ROWS {
-            for c in 0..BLOCK_COLS {
-                let idx = r * BLOCK_COLS + c;
-                next[idx] = self[idx] * other[idx];
-            }
+        for idx in 0..BLOCK_SIZE {
+            next[idx] = self[idx] * other[idx];
         }
         next
-    }
-}
-
-pub(crate) struct BlockIter<'a, T> {
-    block: &'a Block<T>,
-    index: usize,
-}
-
-impl<T> Iterator for BlockIter<'_, T>
-where
-    T: Copy,
-{
-    type Item = T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.index >= BLOCK_SIZE {
-            None
-        } else {
-            let value = self.block.0[self.index];
-            self.index += 1;
-            Some(value)
-        }
     }
 }
 
@@ -308,11 +276,8 @@ impl<T> Block<T> {
         BLOCK_COLS * BLOCK_ROWS
     }
 
-    pub(crate) fn iter(&self) -> BlockIter<'_, T> {
-        BlockIter {
-            block: self,
-            index: 0,
-        }
+    pub(crate) fn into_iter(self) -> impl Iterator<Item = T> {
+        self.0.into_iter()
     }
 }
 
@@ -325,22 +290,16 @@ where
         U: Copy + ToPrimitive + 'static,
     {
         let mut next = Block::default();
-        for r in 0..BLOCK_ROWS {
-            for c in 0..BLOCK_COLS {
-                let idx = r * BLOCK_COLS + c;
-                let converted_value = match std::any::TypeId::of::<U>() {
-                    id if id == std::any::TypeId::of::<f32>() => {
-                        let f_val = value[idx].to_f32().ok_or(Error::BlockConversion)?;
-                        <T as NumCast>::from(f_val.round()).ok_or(Error::BlockConversion)?
-                    }
-                    id if id == std::any::TypeId::of::<f64>() => {
-                        let f_val = value[idx].to_f64().ok_or(Error::BlockConversion)?;
-                        <T as NumCast>::from(f_val.round()).ok_or(Error::BlockConversion)?
-                    }
-                    _ => <T as NumCast>::from(value[idx]).ok_or(Error::BlockConversion)?,
-                };
-                next[idx] = converted_value;
-            }
+        let is_float = std::any::TypeId::of::<U>() == std::any::TypeId::of::<f32>()
+            || std::any::TypeId::of::<U>() == std::any::TypeId::of::<f64>();
+        for idx in 0..BLOCK_SIZE {
+            let converted_value = if is_float {
+                let f_val = value[idx].to_f64().ok_or(Error::BlockConversion)?;
+                <T as NumCast>::from(f_val.round()).ok_or(Error::BlockConversion)?
+            } else {
+                <T as NumCast>::from(value[idx]).ok_or(Error::BlockConversion)?
+            };
+            next[idx] = converted_value;
         }
         Ok(next)
     }
@@ -371,11 +330,8 @@ where
 {
     pub fn sum_of_abs_difference(&self, other: &Block<T>) -> T {
         let mut sum = T::default();
-        for r in 0..BLOCK_ROWS {
-            for c in 0..BLOCK_COLS {
-                let idx = r * BLOCK_COLS + c;
-                sum += (self[idx] - other[idx]).abs();
-            }
+        for idx in 0..BLOCK_SIZE {
+            sum += (self[idx] - other[idx]).abs();
         }
         sum
     }
@@ -387,18 +343,13 @@ where
 {
     pub fn clamp(self, min: T, max: T) -> Self {
         let mut block = self;
-
-        for r in 0..BLOCK_ROWS {
-            for c in 0..BLOCK_COLS {
-                let idx = r * BLOCK_COLS + c;
-                if block[idx] < min {
-                    block[idx] = min;
-                } else if block[idx] > max {
-                    block[idx] = max;
-                }
+        for idx in 0..BLOCK_SIZE {
+            if block[idx] < min {
+                block[idx] = min;
+            } else if block[idx] > max {
+                block[idx] = max;
             }
         }
-
         block
     }
 }
@@ -650,7 +601,7 @@ mod tests {
         block.set(0, 1, 2);
         block.set(1, 0, 9); // row 1, col 0 = index 8
 
-        let mut iter = block.iter();
+        let mut iter = block.into_iter();
         assert_eq!(iter.next(), Some(1)); // [0][0]
         assert_eq!(iter.next(), Some(2)); // [0][1]
         assert_eq!(iter.next(), Some(0)); // [0][2]
@@ -667,7 +618,7 @@ mod tests {
         let arr = [1; 64];
         let block: Block<i32> = Block::from(arr);
 
-        let collected: Vec<i32> = block.iter().collect();
+        let collected: Vec<i32> = block.into_iter().collect();
         assert_eq!(collected.len(), 64);
         assert!(collected.iter().all(|&x| x == 1));
     }
@@ -675,7 +626,7 @@ mod tests {
     #[test]
     fn test_block_iter_empty_at_end() {
         let block: Block<i32> = Block::default();
-        let mut iter = block.iter();
+        let mut iter = block.into_iter();
 
         // Consume all 64 elements
         for _ in 0..64 {
