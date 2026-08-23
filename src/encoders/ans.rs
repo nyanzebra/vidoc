@@ -1,7 +1,6 @@
 use std::io::{Read, Write};
 
 use num_traits::{ops::bytes::ToBytes, FromBytes, PrimInt};
-use rayon::iter::{IntoParallelRefIterator as _, ParallelIterator as _};
 
 use crate::{
     bitstream::{BitStreamReader, BitStreamWriter},
@@ -37,10 +36,7 @@ pub(crate) fn encode<T>(data: &[T], stream: &mut BitStreamWriter<impl Write>) ->
 where
     T: crate::ToBytes + Sync,
 {
-    let data = data
-        .par_iter()
-        .flat_map(|x| x.to_bytes())
-        .collect::<Vec<u8>>();
+    let data = data.iter().flat_map(|x| x.to_bytes()).collect::<Vec<u8>>();
 
     encode_raw::<BYTE_SIZE_U8, u8, _>(&data, stream)?;
 
