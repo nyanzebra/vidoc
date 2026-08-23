@@ -64,14 +64,14 @@ impl<'a, T> Jpg<'a, T> {
                 lumi_quantizor
                     .quantize(y.dct().clamp(i16::MIN as f64, i16::MAX as f64).convert_to())
                     .zigzag()
-                    .iter()
+                    .into_iter()
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
 
         let chroma_quantizor = Quantizor::<Q>::image_chrominance();
         let cb_dct = cb
-            .iter()
+            .into_iter()
             .flat_map(|cb| {
                 chroma_quantizor
                     .quantize(
@@ -80,13 +80,13 @@ impl<'a, T> Jpg<'a, T> {
                             .convert_to(),
                     )
                     .zigzag()
-                    .iter()
+                    .into_iter()
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
 
         let cr_dct = cr
-            .iter()
+            .into_iter()
             .flat_map(|cr| {
                 chroma_quantizor
                     .quantize(
@@ -95,7 +95,7 @@ impl<'a, T> Jpg<'a, T> {
                             .convert_to(),
                     )
                     .zigzag()
-                    .iter()
+                    .into_iter()
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
