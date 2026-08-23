@@ -132,13 +132,14 @@ impl Rgb8Ref<'_> {
     pub fn to_ycbcr(&self) -> Vec<Ycbcr> {
         self.data
             .par_chunks(Self::depth().into())
-            .map(|rgb| Rgba {
-                r: rgb[0],
-                g: rgb[1],
-                b: rgb[2],
-                a: 0,
+            .map(|rgb| {
+                rgba_to_ycbcr(&Rgba {
+                    r: rgb[0],
+                    g: rgb[1],
+                    b: rgb[2],
+                    a: 0,
+                })
             })
-            .map(|rgba| rgba_to_ycbcr(&rgba))
             .collect()
     }
 }
@@ -147,13 +148,14 @@ impl Rgba8Ref<'_> {
     pub fn to_ycbcr(&self) -> Vec<Ycbcr> {
         self.data
             .par_chunks(Self::depth().into())
-            .map(|rgb| Rgba {
-                r: rgb[0],
-                g: rgb[1],
-                b: rgb[2],
-                a: rgb[3],
+            .map(|rgb| {
+                rgba_to_ycbcr(&Rgba {
+                    r: rgb[0],
+                    g: rgb[1],
+                    b: rgb[2],
+                    a: rgb[3],
+                })
             })
-            .map(|rgba| rgba_to_ycbcr(&rgba))
             .collect()
     }
 }
@@ -162,13 +164,14 @@ impl Rgb16Ref<'_> {
     pub fn to_ycbcr(&self) -> Vec<Ycbcr> {
         self.data
             .par_chunks(Self::depth().into())
-            .map(|rgb| Rgba {
-                r: rgb[0],
-                g: rgb[1],
-                b: rgb[2],
-                a: 0,
+            .map(|rgb| {
+                rgba_to_ycbcr(&Rgba {
+                    r: rgb[0],
+                    g: rgb[1],
+                    b: rgb[2],
+                    a: 0,
+                })
             })
-            .map(|rgba| rgba_to_ycbcr(&rgba))
             .collect()
     }
 }
@@ -177,13 +180,14 @@ impl Rgba16Ref<'_> {
     pub fn to_ycbcr(&self) -> Vec<Ycbcr> {
         self.data
             .par_chunks(Self::depth().into())
-            .map(|rgb| Rgba {
-                r: rgb[0],
-                g: rgb[1],
-                b: rgb[2],
-                a: rgb[3],
+            .map(|rgb| {
+                rgba_to_ycbcr(&Rgba {
+                    r: rgb[0],
+                    g: rgb[1],
+                    b: rgb[2],
+                    a: rgb[3],
+                })
             })
-            .map(|rgba| rgba_to_ycbcr(&rgba))
             .collect()
     }
 }
