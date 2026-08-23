@@ -37,8 +37,8 @@ impl Encodable for IFrame<'_, i16> {
             cr,
         } = &self.0;
 
-        let lumi_quantizor = Quantizor::<i16>::video_luminance();
-        let chroma_quantizor = Quantizor::<i16>::video_chrominance();
+        let lumi_quantizor = Quantizor::<i16>::static_video_luminance();
+        let chroma_quantizor = Quantizor::<i16>::static_video_chrominance();
 
         // Encode all the metadata
         dimensions.encode(stream)?;
@@ -222,8 +222,8 @@ impl Encodable for IFrame<'_, i32> {
             cr,
         } = &self.0;
 
-        let lumi_quantizor = Quantizor::<i32>::video_luminance();
-        let chroma_quantizor = Quantizor::<i32>::video_chrominance();
+        let lumi_quantizor = Quantizor::<i32>::static_video_luminance();
+        let chroma_quantizor = Quantizor::<i32>::static_video_chrominance();
 
         // Encode all the metadata
         dimensions.encode(stream)?;

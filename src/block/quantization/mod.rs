@@ -39,22 +39,22 @@ const IMAGE_CHROMINANCE_QUANTIZATION: Block<i16> = Block([
 
 #[rustfmt::skip]
 const VIDEO_LUMINANCE_QUANTIZATION: Block<i16> = Block([
-    6,  5,  4,  6,  10, 16, 20, 24,  
-    5,  5,  6,  8,  10, 22, 24, 22,  
-    6,  6,  7,  10, 16, 22, 28, 22,  
-    6,  7,  9,  12, 20, 34, 32, 24,  
-    7,  9,  15, 22, 26, 42, 40, 30,  
-    10, 14, 22, 26, 32, 40, 44, 36,  
+    6,  5,  4,  6,  10, 16, 20, 24,
+    5,  5,  6,  8,  10, 22, 24, 22,
+    6,  6,  7,  10, 16, 22, 28, 22,
+    6,  7,  9,  12, 20, 34, 32, 24,
+    7,  9,  15, 22, 26, 42, 40, 30,
+    10, 14, 22, 26, 32, 40, 44, 36,
     20, 26, 30, 34, 40, 48, 48, 40,
     28, 36, 38, 38, 44, 40, 40, 38,
 ]);
 
 #[rustfmt::skip]
 const VIDEO_CHROMINANCE_QUANTIZATION: Block<i16> = Block([
-    6,  6,  8,  16, 32, 32, 32, 32,  
-    6,  7,  9,  22, 32, 32, 32, 32,  
-    8,  9,  18, 32, 32, 32, 32, 32,  
-    16, 22, 32, 32, 32, 32, 32, 32,  
+    6,  6,  8,  16, 32, 32, 32, 32,
+    6,  7,  9,  22, 32, 32, 32, 32,
+    8,  9,  18, 32, 32, 32, 32, 32,
+    16, 22, 32, 32, 32, 32, 32, 32,
     32, 32, 32, 32, 32, 32, 32, 32,
     32, 32, 32, 32, 32, 32, 32, 32,
     32, 32, 32, 32, 32, 32, 32, 32,
@@ -103,6 +103,30 @@ where
             Block::<T>::try_convert_from(IMAGE_LUMINANCE_QUANTIZATION)
                 .expect("valid block type for image luminance"),
         )
+    }
+}
+
+impl Quantizor<i16> {
+    pub(crate) fn static_video_luminance() -> &'static Self {
+        static Q: std::sync::OnceLock<Quantizor<i16>> = std::sync::OnceLock::new();
+        Q.get_or_init(Quantizor::video_luminance)
+    }
+
+    pub(crate) fn static_video_chrominance() -> &'static Self {
+        static Q: std::sync::OnceLock<Quantizor<i16>> = std::sync::OnceLock::new();
+        Q.get_or_init(Quantizor::video_chrominance)
+    }
+}
+
+impl Quantizor<i32> {
+    pub(crate) fn static_video_luminance() -> &'static Self {
+        static Q: std::sync::OnceLock<Quantizor<i32>> = std::sync::OnceLock::new();
+        Q.get_or_init(Quantizor::video_luminance)
+    }
+
+    pub(crate) fn static_video_chrominance() -> &'static Self {
+        static Q: std::sync::OnceLock<Quantizor<i32>> = std::sync::OnceLock::new();
+        Q.get_or_init(Quantizor::video_chrominance)
     }
 }
 

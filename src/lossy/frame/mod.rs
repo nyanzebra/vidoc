@@ -391,8 +391,13 @@ pub(crate) fn calculate_residuals_for_macroblock(
     predicted_cr: &[Block<i16>],
 ) -> Residuals<i16> {
     let BlockLocation { start, end } = location;
-    let quantizor_y = Quantizor::<f64>::video_luminance();
-    let quantizor_chroma = Quantizor::<f64>::video_chrominance();
+    // These are the same tables every call — construct once via OnceLock.
+    // Note: f64 Quantizor can't use the static_* helpers (those are i16/i32 only)
+    // so we use a local OnceLock here.
+    static Q_Y: OnceLock<Quantizor<f64>> = OnceLock::new();
+    static Q_C: OnceLock<Quantizor<f64>> = OnceLock::new();
+    let quantizor_y = Q_Y.get_or_init(Quantizor::<f64>::video_luminance);
+    let quantizor_chroma = Q_C.get_or_init(Quantizor::<f64>::video_chrominance);
 
     let mut y_residuals = Vec::new();
 
@@ -562,9 +567,11 @@ pub(crate) fn reassemble_frame<MB: r#macro::AssemblableMacroBlock>(
     let mut cb_blocks: Vec<Block<i16>> = base_cb.to_vec();
     let mut cr_blocks: Vec<Block<i16>> = base_cr.to_vec();
 
-    // Create quantizors for dequantizing residuals
-    let quantizor = Quantizor::<f64>::video_luminance();
-    let chroma_quantizor = Quantizor::<f64>::video_chrominance();
+    // Create quantizors for dequantizing residuals — cached via OnceLock
+    static Q_Y_R: OnceLock<Quantizor<f64>> = OnceLock::new();
+    static Q_C_R: OnceLock<Quantizor<f64>> = OnceLock::new();
+    let quantizor = Q_Y_R.get_or_init(Quantizor::<f64>::video_luminance);
+    let chroma_quantizor = Q_C_R.get_or_init(Quantizor::<f64>::video_chrominance);
 
     for mb in macro_blocks.iter() {
         let BlockLocation { start, end } = mb.location();
