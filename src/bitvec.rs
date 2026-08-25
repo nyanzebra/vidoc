@@ -159,8 +159,11 @@ impl BitVec {
             } else {
                 // Not byte-aligned, read bit by bit for this byte
                 for _ in 0..8 {
-                    let bit = self.pop_bit()?;
-                    byte_val = (byte_val << 1) | (bit as u8);
+                    if let Some(bit) = self.pop_bit() {
+                        byte_val = (byte_val << 1) | (bit as u8);
+                    } else {
+                        return None;
+                    }
                 }
             }
 
@@ -171,8 +174,11 @@ impl BitVec {
 
         // Handle remaining bits (less than 8)
         for _ in 0..remaining_bits {
-            let bit = self.pop_bit()?;
-            result = (result << 1) | (bit as u128);
+            if let Some(bit) = self.pop_bit() {
+                result = (result << 1) | (bit as u128);
+            } else {
+                return None;
+            }
         }
 
         Some(result)
