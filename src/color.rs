@@ -648,11 +648,7 @@ pub fn upsample_ycbcr(
             let mut upsampled_cr = vec![0.0; width * height];
 
             // Calculate chroma width from the actual array length
-            let samples = if height > 0 {
-                cb.len() / height
-            } else {
-                width.div_ceil(4)
-            };
+            let samples = cb.len().checked_div(height).unwrap_or(width.div_ceil(4));
 
             // Process in parallel by rows
             upsampled_cb
@@ -693,11 +689,7 @@ pub fn upsample_ycbcr(
             let mut upsampled_cr = vec![0.0; width * height];
 
             // Calculate chroma width from the actual array length
-            let chroma_width = if height > 0 {
-                cb.len() / height
-            } else {
-                width.div_ceil(2)
-            };
+            let chroma_width = cb.len().checked_div(height).unwrap_or(width.div_ceil(2));
 
             // Process in parallel by rows
             upsampled_cb
