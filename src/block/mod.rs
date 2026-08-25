@@ -370,8 +370,10 @@ where
     fn from_bytes(bytes: &[u8]) -> (Self, usize) {
         let block_bytes = &bytes[..N * BLOCK_SIZE];
         let vec: Vec<T> = block_bytes
-            .chunks_exact(N)
-            .map(|x| T::from_be_bytes(x.try_into().expect("bytes")))
+            .as_chunks::<N>()
+            .0
+            .iter()
+            .map(|x| T::from_be_bytes(x))
             .collect();
         let array: [T; BLOCK_SIZE] = vec.try_into().expect("block size array");
         (Self(array), N * BLOCK_SIZE)
