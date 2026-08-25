@@ -102,16 +102,24 @@ where
         }
     }
 
-    stream.write(unique_count)?;
+    stream.write_u32(
+        unique_count
+            .try_into()
+            .expect("unique_count exceeds u32 range"),
+    )?;
     for (symbol, count) in &symbol_map {
         let bytes = symbol.to_be_bytes();
         stream.write_slice(&bytes)?;
-        stream.write(*count)?;
+        stream.write_u32(*count)?;
     }
     stream.align_to_byte()?;
 
     // Write data length
-    stream.write(data.len())?;
+    stream.write_u32(
+        data.len()
+            .try_into()
+            .expect("data length exceeds u32 range"),
+    )?;
 
     // Single-value optimization
     if unique_count == 1 {
@@ -200,11 +208,11 @@ where
     }
 
     // Write output
-    stream.write(state)?;
+    stream.write_u32(state)?;
 
     // Write output words in reverse
     for &word in output_words.iter().rev() {
-        stream.write(word)?;
+        stream.write_u16(word)?;
     }
 
     Ok(())
@@ -253,20 +261,16 @@ where
     }
 
     // Read frequency table from stream
-    let num_symbols = stream
-        .read::<usize>()?
-        .ok_or(Error::FailedToDecode("num_symbols".to_owned()))?;
+    let num_symbols = stream.read_u32()?;
 
     let mut freq_table = vec![0u32; array_size];
-    let mut symbols = Vec::with_capacity(num_symbols);
+    let mut symbols = Vec::with_capacity(num_symbols as usize);
 
     for _ in 0..num_symbols {
         let byte_array = stream.read_array::<N>()?;
         let symbol = T::from_be_bytes(&byte_array);
 
-        let freq = stream
-            .read::<u32>()?
-            .ok_or(Error::FailedToDecode("frequency".to_owned()))?;
+        let freq = stream.read_u32()?;
 
         let idx = if N == BYTE_SIZE_I16 {
             (symbol.to_i16().unwrap() as i32 + I16_OFFSET) as usize
@@ -281,15 +285,13 @@ where
     stream.align_to_byte()?;
 
     // Read number of symbols to decode
-    let len = stream
-        .read::<usize>()?
-        .ok_or(Error::FailedToDecode("len".to_owned()))?;
+    let len = stream.read_u32()?;
 
-    let mut result = Vec::with_capacity(len);
+    let mut result = Vec::with_capacity(len as usize);
 
     // Check for single-value optimization
     if num_symbols == 1 {
-        result.resize(len, symbols[0]);
+        result.resize(len as usize, symbols[0]);
         return Ok(result);
     }
 
@@ -350,9 +352,7 @@ where
     }
 
     // Initialize ANS state
-    let mut state = stream
-        .read::<u32>()?
-        .ok_or(Error::FailedToDecode("initial state".to_owned()))?;
+    let mut state = stream.read_u32()?;
 
     // Decode symbols
     for _ in 0..len {
@@ -381,9 +381,7 @@ where
 
         // Renormalize if needed
         while state < TABLE_SIZE as u32 {
-            let bits = stream
-                .read::<u16>()?
-                .ok_or(Error::FailedToDecode("renorm bits".to_owned()))?;
+            let bits = stream.read_u16()?;
             state = (state << RENORM_SHIFT_BITS) | bits as u32;
         }
     }

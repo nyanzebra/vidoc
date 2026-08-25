@@ -1,123 +1,378 @@
-// https://unix4lyfe.org/rice-coding/?ref=blog.tempus-ex.com
-// TLDR:
-// m = 2^k
-// Let q = x / m (round fractions down)
-// Write out q binary ones.
-// Write out a binary zero.
-// (Some people prefer to do it the other way - zeroes followed by a one)
-// Write out the last k bits of x
+//! Rice/Golomb coding for signed 16-bit residuals.
+//!
+//! The bitstream format is:
+//!
+//!     zigzag(value)
+//!         -> quotient = value >> k
+//!         -> remainder = value & ((1 << k) - 1)
+//!         -> quotient zero bits
+//!         -> terminating one bit
+//!         -> k remainder bits
+//!
+//! The unary portion is therefore zeroes followed by one.
+//!
+//! Signed values use zig-zag mapping so small positive and negative residuals
+//! both receive short codes.
 
 use std::io::{Read, Write};
 
-use crate::{BitStreamReader, BitStreamWriter, Result};
+use crate::{BitStreamReader, BitStreamWriter, Error, Result};
 
-// Taken from https://github.com/tempus-ex/hello-video-codec/blob/main/src/codec.rs
-// It appears that using just unsigned as is for the rice coding is not great...
-// it leads to a lot of wasted bits.
-// This operation tries to make the lower bits more significant.
+const MAX_K: u8 = 15;
+
+/// Encode a signed i16 residual using Rice coding.
+///
+/// `k` must be in `0..=15`.
 pub(crate) fn encode<W>(k: u32, x: i32, stream: &mut BitStreamWriter<W>) -> Result<()>
 where
     W: Write,
 {
-    // EXACT COPY of reference implementation logic, adapted for i32 input
-    let x = ((x >> 30) ^ (2 * x)) as u32;
-    let high_bits = x >> k;
+    let k = validate_k(k)?;
 
-    // Write the unary encoding: high_bits zeros followed by a 1
-    stream.write_zeros(high_bits as usize)?;
+    let x = i16::try_from(x).map_err(|_| Error::InvalidData)?;
+    let mapped = zigzag_encode(x);
+
+    let quotient = mapped >> k;
+    let remainder = mapped & remainder_mask(k);
+
+    // Unary quotient: q zeroes followed by one.
+    stream.write_zeros(quotient as usize)?;
     stream.write_bits(1u128, 1)?;
 
-    // Write low bits if any
-    if k > 0 {
-        stream.write_bits((x & ((1 << k) - 1)) as u128, k as usize)?;
+    if k != 0 {
+        stream.write_bits(remainder as u128, k as usize)?;
     }
 
     Ok(())
 }
 
+/// Decode one signed i16 residual.
+///
+/// Truncated entropy-coded data is always rejected.
 pub(crate) fn decode<R>(k: u32, stream: &mut BitStreamReader<R>) -> Result<i32>
 where
     R: Read,
 {
-    // Read unary: count leading zeros until we hit a 1
-    // This exactly matches the reference implementation
-    let mut high_bits = 0;
-    while let Some(bit) = stream.read_bits(1)? {
-        if bit == 0 {
-            high_bits += 1;
-        } else {
-            break;
-        }
-    }
+    let k = validate_k(k)?;
 
-    // Read low bits exactly as reference - use regular read for k bits
-    let low_bits = if k == 0 {
-        0
+    let quotient = read_unary_quotient(stream)?;
+
+    let remainder = if k == 0 {
+        0u32
     } else {
-        stream.read_bits(k as usize)?.unwrap_or(0) as u32
+        stream
+            .read_bits(k as usize)?
+            .ok_or(Error::UnexpectedEndOfStream)? as u32
     };
 
-    let x = ((high_bits as u32) << k) | low_bits;
+    let mapped = (quotient << k) | remainder;
 
-    // EXACT COPY of reference decode transform
-    let result = (x as i32 >> 1) ^ ((x << 31) as i32 >> 31);
-    Ok(result)
+    // Zig-zag encoding of an i16 occupies exactly 16 bits.
+    if mapped > u16::MAX as u32 {
+        return Err(Error::InvalidData);
+    }
+
+    Ok(zigzag_decode(mapped as u16) as i32)
 }
 
-// https://blog.tempus-ex.com/hello-video-codec/
-// We want to choose k values relatively well, as that will optimize are end compression
+/// Choose a Rice parameter from four neighboring 16-bit samples.
+///
+/// The activity measure is deliberately computed in i32 so subtraction cannot
+/// overflow at the edges of the u16 range.
 pub(crate) fn k(a: u16, c: u16, b: u16, d: u16) -> u32 {
-    let activity =
-        (d as i32 - b as i32).abs() + (b as i32 - c as i32).abs() + (c as i32 - a as i32).abs();
-    let mut k = 0;
-    while 3 << k < activity {
+    let activity = abs_diff(a, b) as u32 + abs_diff(b, c) as u32 + abs_diff(c, d) as u32;
+
+    choose_k(activity, MAX_K) as u32
+}
+
+#[inline]
+fn validate_k(k: u32) -> Result<u8> {
+    if k > MAX_K as u32 {
+        return Err(Error::InvalidData);
+    }
+
+    Ok(k as u8)
+}
+
+#[inline]
+fn remainder_mask(k: u8) -> u32 {
+    if k == 0 {
+        0
+    } else {
+        (1u32 << k) - 1
+    }
+}
+
+#[inline]
+fn zigzag_encode(value: i16) -> u16 {
+    let value = value as i32;
+
+    // Produces:
+    //
+    //      0 -> 0
+    //     -1 -> 1
+    //      1 -> 2
+    //     -2 -> 3
+    //      2 -> 4
+    //
+    // The operation is performed in i32 to avoid signed i16 overflow.
+    ((value << 1) ^ (value >> 31)) as u16
+}
+
+#[inline]
+fn zigzag_decode(value: u16) -> i16 {
+    let value = value as i32;
+
+    ((value >> 1) ^ -(value & 1)) as i16
+}
+
+#[inline]
+fn read_unary_quotient<R>(stream: &mut BitStreamReader<R>) -> Result<u32>
+where
+    R: Read,
+{
+    let mut quotient = 0u32;
+
+    loop {
+        match stream.read_bit()? {
+            Some(true) => return Ok(quotient),
+            Some(false) => {
+                quotient = quotient.checked_add(1).ok_or(Error::InvalidData)?;
+
+                // An i16 zig-zag value is at most 65535. Consequently the
+                // quotient can never exceed 65535.
+                if quotient > u16::MAX as u32 {
+                    return Err(Error::InvalidData);
+                }
+            }
+            None => return Err(Error::UnexpectedEndOfStream),
+        }
+    }
+}
+
+#[inline]
+fn abs_diff(a: u16, b: u16) -> u16 {
+    a.abs_diff(b)
+}
+
+#[inline]
+fn choose_k(activity: u32, max_k: u8) -> u8 {
+    let mut k = 0u8;
+
+    while k < max_k && (3u32 << k) < activity {
         k += 1;
     }
+
     k
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{BitStreamReader, BitStreamWriter};
 
-    #[test]
-    fn test_simple_encode_decode() {
-        // Test a simple value first
-        let value = 0i32;
-        let k = 0u32;
-        let mut buf = vec![];
+    fn round_trip(value: i32, k: u32) -> Result<i32> {
+        let mut buffer = Vec::new();
+
         {
-            let mut dest = BitStreamWriter::new(&mut buf);
-            encode(k, value, &mut dest).unwrap();
-            dest.flush().unwrap();
+            let mut writer = BitStreamWriter::new(&mut buffer);
+            encode(k, value, &mut writer)?;
+            writer.flush()?;
         }
-        let mut bitstream = BitStreamReader::new(&*buf);
-        let decoded = decode(k, &mut bitstream).unwrap();
-        assert_eq!(value, decoded);
+
+        let mut reader = BitStreamReader::new(buffer.as_slice());
+        decode(k, &mut reader)
     }
 
     #[test]
-    fn test_encode_decode_u8() {
-        let input = [
-            148, 131, 111, 147, 130, 110, 146, 129, 109, 149, 132, 112, 147, 130, 110, 149, 132,
-            112, 144, 127, 107, 147, 130, 110, 148, 131, 111, 150, 133, 113, 151, 134, 114, 149,
-            132, 112, 151, 134, 114, 149, 132, 112, 150, 133, 113, 152, 135, 115, 154, 139, 118,
-            154, 139, 118, 153, 138, 117, 152, 137, 116, 150, 135, 114, 153, 138, 117, 151, 136,
-            115, 145, 130, 109, 152, 137, 114, 158, 143, 120, 158, 143, 120, 151, 136, 113, 154,
-            142, 120, 156, 144, 122, 157, 146, 126, 155, 147, 128, 154, 146, 133, 167,
+    fn zigzag_mapping_is_correct() {
+        let values = [
+            (0i16, 0u16),
+            (-1, 1),
+            (1, 2),
+            (-2, 3),
+            (2, 4),
+            (-3, 5),
+            (3, 6),
+            (-32768, 65535),
+            (32767, 65534),
         ];
-        let mut buf = vec![];
-        for k in 0..10 {
-            for x in input {
-                buf.clear();
-                {
-                    let mut dest = BitStreamWriter::new(&mut buf);
-                    encode(k, x, &mut dest).unwrap();
-                    dest.flush().unwrap();
+
+        for (value, expected) in values {
+            assert_eq!(zigzag_encode(value), expected);
+            assert_eq!(zigzag_decode(expected), value);
+        }
+    }
+
+    #[test]
+    fn round_trip_all_i16_values_for_small_k() {
+        // Testing every value against every possible k is useful but can
+        // generate a lot of unary bits at k=0. Exercise the full domain with
+        // representative k values and all values with the practically useful
+        // range.
+        for value in i16::MIN..=i16::MAX {
+            for k in [0u32, 1, 2, 3, 4, 5, 7, 8, 10, 12, 15] {
+                let decoded = round_trip(value as i32, k).unwrap();
+
+                assert_eq!(
+                    decoded, value as i32,
+                    "round trip failed for value={} k={}",
+                    value, k
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn round_trip_common_residuals_for_all_k() {
+        let values = [
+            i32::MIN + 1,
+            -32768,
+            -32767,
+            -16384,
+            -8192,
+            -4096,
+            -1024,
+            -256,
+            -128,
+            -64,
+            -32,
+            -16,
+            -8,
+            -4,
+            -2,
+            -1,
+            0,
+            1,
+            2,
+            4,
+            8,
+            16,
+            32,
+            64,
+            128,
+            256,
+            1024,
+            4096,
+            8192,
+            16384,
+            32766,
+            32767,
+        ];
+
+        for &value in &values {
+            for k in 0..=MAX_K as u32 {
+                assert_eq!(
+                    round_trip(value, k).unwrap(),
+                    value,
+                    "failed for value={} k={}",
+                    value,
+                    k
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_out_of_range_input() {
+        let mut buffer = Vec::new();
+        let mut writer = BitStreamWriter::new(&mut buffer);
+
+        assert!(encode(0, -32769, &mut writer).is_err());
+        assert!(encode(0, 32768, &mut writer).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_k() {
+        let mut buffer = Vec::new();
+        let mut writer = BitStreamWriter::new(&mut buffer);
+
+        assert!(encode(16, 0, &mut writer).is_err());
+        assert!(encode(u32::MAX, 0, &mut writer).is_err());
+    }
+
+    #[test]
+    fn rejects_truncated_unary_code() {
+        let data = [0u8];
+
+        let mut reader = BitStreamReader::new(data.as_slice());
+
+        assert!(matches!(
+            decode(0, &mut reader),
+            Err(Error::UnexpectedEndOfStream)
+        ));
+    }
+
+    #[test]
+    fn rejects_empty_stream() {
+        let mut reader = BitStreamReader::new([].as_slice());
+
+        assert!(matches!(
+            decode(0, &mut reader),
+            Err(Error::UnexpectedEndOfStream)
+        ));
+    }
+
+    #[test]
+    fn sequential_stream_round_trip() {
+        let values = [
+            -32768i32, -16384, -1024, -128, -64, -32, -16, -8, -4, -2, -1, 0, 1, 2, 4, 8, 16, 32,
+            64, 128, 1024, 16384, 32767,
+        ];
+
+        let mut buffer = Vec::new();
+
+        {
+            let mut writer = BitStreamWriter::new(&mut buffer);
+
+            for &value in &values {
+                encode(7, value, &mut writer).unwrap();
+            }
+
+            writer.flush().unwrap();
+        }
+
+        let mut reader = BitStreamReader::new(buffer.as_slice());
+
+        for &expected in &values {
+            let actual = decode(7, &mut reader).unwrap();
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn k_is_bounded() {
+        for a in [0u16, 1, 127, 255, 1023, 32767, 65534, 65535] {
+            for b in [0u16, 1, 127, 255, 1023, 32767, 65534, 65535] {
+                for c in [0u16, 1, 127, 255, 1023, 32767, 65534, 65535] {
+                    for d in [0u16, 1, 127, 255, 1023, 32767, 65534, 65535] {
+                        assert!(k(a, c, b, d) <= MAX_K as u32);
+                    }
                 }
-                let mut bitstream = BitStreamReader::new(&*buf);
-                let decoded = decode(k, &mut bitstream).unwrap();
-                assert_eq!(x, decoded);
+            }
+        }
+    }
+
+    #[test]
+    fn k_is_zero_for_constant_region() {
+        assert_eq!(k(1000, 1000, 1000, 1000), 0);
+        assert_eq!(k(0, 0, 0, 0), 0);
+        assert_eq!(k(65535, 65535, 65535, 65535), 0);
+    }
+
+    #[test]
+    fn high_activity_gets_higher_parameter() {
+        let flat = k(1000, 1000, 1000, 1000);
+        let active = k(0, 65535, 0, 65535);
+
+        assert!(active >= flat);
+    }
+
+    #[test]
+    fn signed_extremes_round_trip() {
+        for &value in &[-32768i32, -32767, -1, 0, 1, 32766, 32767] {
+            for k in 0..=15 {
+                assert_eq!(round_trip(value, k).unwrap(), value);
             }
         }
     }

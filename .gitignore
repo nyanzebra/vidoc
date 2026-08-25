@@ -17,3 +17,6 @@
 cobertura.xml
 lcov.info
 tarpaulin-report.html
+
+# git
+*.patch

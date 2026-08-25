@@ -316,16 +316,16 @@ mod tests {
     fn create_test_subsample_block_group(blocks: &[Block<i16>]) -> SubSampleBlockGroup<i16> {
         use crate::color::Subsampling;
 
-        SubSampleBlockGroup {
-            dimensions: BlockDimensions {
+        SubSampleBlockGroup::new(
+            BlockDimensions {
                 width: 4,
                 height: 4,
             },
-            subsampling: Subsampling::Sample420,
-            y: blocks.to_vec(),
-            cb: blocks.to_vec(),
-            cr: blocks.to_vec(),
-        }
+            Subsampling::Sample420,
+            blocks.to_vec(),
+            blocks.to_vec(),
+            blocks.to_vec(),
+        )
     }
 
     // Helper to create test frame with specific luma value
@@ -339,13 +339,13 @@ mod tests {
             }
         }
 
-        SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![block; width * height],
-            cb: vec![Block::<i16>::default(); width * height / 4],
-            cr: vec![Block::<i16>::default(); width * height / 4],
-        }
+        SubSampleBlockGroup::new(
+            BlockDimensions { width, height },
+            Subsampling::Sample420,
+            vec![block; width * height],
+            vec![Block::<i16>::default(); width * height / 4],
+            vec![Block::<i16>::default(); width * height / 4],
+        )
     }
 
     #[test]
@@ -698,30 +698,30 @@ mod tests {
         let height = 8;
 
         // Create frames with distinct values to test motion compensation
-        let mut current = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
+        let mut current = SubSampleBlockGroup::new(
+            BlockDimensions { width, height },
+            Subsampling::Sample420,
+            vec![Block::<i16>::default(); width * height],
             // 4x4 chroma blocks
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+            vec![Block::<i16>::default(); (width * height) / 4],
+            vec![Block::<i16>::default(); (width * height) / 4],
+        );
 
-        let mut forward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let mut forward_ref = SubSampleBlockGroup::new(
+            BlockDimensions { width, height },
+            Subsampling::Sample420,
+            vec![Block::<i16>::default(); width * height],
+            vec![Block::<i16>::default(); (width * height) / 4],
+            vec![Block::<i16>::default(); (width * height) / 4],
+        );
 
-        let mut backward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let mut backward_ref = SubSampleBlockGroup::new(
+            BlockDimensions { width, height },
+            Subsampling::Sample420,
+            vec![Block::<i16>::default(); width * height],
+            vec![Block::<i16>::default(); (width * height) / 4],
+            vec![Block::<i16>::default(); (width * height) / 4],
+        );
 
         // Set specific chroma values in forward reference
         // Cb channel: set first block to 100
@@ -851,13 +851,13 @@ mod tests {
         let height = 8;
 
         // Create frames where content has moved
-        let mut forward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let mut forward_ref = SubSampleBlockGroup::new(
+            BlockDimensions { width, height },
+            Subsampling::Sample420,
+            vec![Block::<i16>::default(); width * height],
+            vec![Block::<i16>::default(); (width * height) / 4],
+            vec![Block::<i16>::default(); (width * height) / 4],
+        );
 
         // Put a chroma "feature" at position (1, 1) - second chroma block row/col
         // Row 1, Col 1 in 4x4 chroma grid
@@ -870,13 +870,13 @@ mod tests {
         }
 
         // Current frame: same "feature" but needs motion compensation to find it
-        let mut current = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let mut current = SubSampleBlockGroup::new(
+            BlockDimensions { width, height },
+            Subsampling::Sample420,
+            vec![Block::<i16>::default(); width * height],
+            vec![Block::<i16>::default(); (width * height) / 4],
+            vec![Block::<i16>::default(); (width * height) / 4],
+        );
 
         // Put same chroma feature at same location
         for r in 0..8 {
@@ -886,13 +886,13 @@ mod tests {
             }
         }
 
-        let backward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let backward_ref = SubSampleBlockGroup::new(
+            BlockDimensions { width, height },
+            Subsampling::Sample420,
+            vec![Block::<i16>::default(); width * height],
+            vec![Block::<i16>::default(); (width * height) / 4],
+            vec![Block::<i16>::default(); (width * height) / 4],
+        );
 
         // Create B-frame
         let bframe = BFrame::new(
@@ -955,13 +955,13 @@ mod tests {
 
         // Create a distinctive pattern in forward reference
         // We'll put a unique value in each luma block to track motion
-        let mut forward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let mut forward_ref = SubSampleBlockGroup::new(
+            BlockDimensions { width, height },
+            Subsampling::Sample420,
+            vec![Block::<i16>::default(); width * height],
+            vec![Block::<i16>::default(); (width * height) / 4],
+            vec![Block::<i16>::default(); (width * height) / 4],
+        );
 
         // Set luma block at position (2, 2) to value 100
         // Row 2, Col 2
@@ -984,13 +984,13 @@ mod tests {
         }
 
         // Create current frame with same pattern at position (3, 3)
-        let mut current = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let mut current = SubSampleBlockGroup::new(
+            BlockDimensions { width, height },
+            Subsampling::Sample420,
+            vec![Block::<i16>::default(); width * height],
+            vec![Block::<i16>::default(); (width * height) / 4],
+            vec![Block::<i16>::default(); (width * height) / 4],
+        );
 
         let luma_idx_3_3 = 3 * width + 3;
         for r in 0..8 {
@@ -1007,13 +1007,13 @@ mod tests {
             }
         }
 
-        let backward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let backward_ref = SubSampleBlockGroup::new(
+            BlockDimensions { width, height },
+            Subsampling::Sample420,
+            vec![Block::<i16>::default(); width * height],
+            vec![Block::<i16>::default(); (width * height) / 4],
+            vec![Block::<i16>::default(); (width * height) / 4],
+        );
 
         // Debug: Print what's in the forward reference
         println!("\n=== Forward Reference ===");
@@ -1147,13 +1147,13 @@ mod tests {
         let height = 8;
 
         // Create frames with different chroma values
-        let mut current = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let mut current = SubSampleBlockGroup::new(
+            BlockDimensions { width, height },
+            Subsampling::Sample420,
+            vec![Block::<i16>::default(); width * height],
+            vec![Block::<i16>::default(); (width * height) / 4],
+            vec![Block::<i16>::default(); (width * height) / 4],
+        );
 
         // Set distinct chroma values
         for idx in 0..current.cb.len() {
@@ -1165,21 +1165,21 @@ mod tests {
             }
         }
 
-        let forward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let forward_ref = SubSampleBlockGroup::new(
+            BlockDimensions { width, height },
+            Subsampling::Sample420,
+            vec![Block::<i16>::default(); width * height],
+            vec![Block::<i16>::default(); (width * height) / 4],
+            vec![Block::<i16>::default(); (width * height) / 4],
+        );
 
-        let backward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let backward_ref = SubSampleBlockGroup::new(
+            BlockDimensions { width, height },
+            Subsampling::Sample420,
+            vec![Block::<i16>::default(); width * height],
+            vec![Block::<i16>::default(); (width * height) / 4],
+            vec![Block::<i16>::default(); (width * height) / 4],
+        );
 
         let bframe = BFrame::new(
             current.as_ref(),
@@ -1228,29 +1228,29 @@ mod tests {
         let width = 8;
         let height = 8;
 
-        let current = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let current = SubSampleBlockGroup::new(
+            BlockDimensions { width, height },
+            Subsampling::Sample420,
+            vec![Block::<i16>::default(); width * height],
+            vec![Block::<i16>::default(); (width * height) / 4],
+            vec![Block::<i16>::default(); (width * height) / 4],
+        );
 
-        let forward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let forward_ref = SubSampleBlockGroup::new(
+            BlockDimensions { width, height },
+            Subsampling::Sample420,
+            vec![Block::<i16>::default(); width * height],
+            vec![Block::<i16>::default(); (width * height) / 4],
+            vec![Block::<i16>::default(); (width * height) / 4],
+        );
 
-        let backward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let backward_ref = SubSampleBlockGroup::new(
+            BlockDimensions { width, height },
+            Subsampling::Sample420,
+            vec![Block::<i16>::default(); width * height],
+            vec![Block::<i16>::default(); (width * height) / 4],
+            vec![Block::<i16>::default(); (width * height) / 4],
+        );
 
         let bframe = BFrame::new(
             current.as_ref(),
@@ -1307,13 +1307,13 @@ mod tests {
         let height = 4;
 
         // Create a current frame with specific chroma values
-        let mut current = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let mut current = SubSampleBlockGroup::new(
+            BlockDimensions { width, height },
+            Subsampling::Sample420,
+            vec![Block::<i16>::default(); width * height],
+            vec![Block::<i16>::default(); (width * height) / 4],
+            vec![Block::<i16>::default(); (width * height) / 4],
+        );
 
         // Set specific chroma values - these will require residuals
         for r in 0..8 {
@@ -1323,21 +1323,21 @@ mod tests {
             }
         }
 
-        let forward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let forward_ref = SubSampleBlockGroup::new(
+            BlockDimensions { width, height },
+            Subsampling::Sample420,
+            vec![Block::<i16>::default(); width * height],
+            vec![Block::<i16>::default(); (width * height) / 4],
+            vec![Block::<i16>::default(); (width * height) / 4],
+        );
 
-        let backward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let backward_ref = SubSampleBlockGroup::new(
+            BlockDimensions { width, height },
+            Subsampling::Sample420,
+            vec![Block::<i16>::default(); width * height],
+            vec![Block::<i16>::default(); (width * height) / 4],
+            vec![Block::<i16>::default(); (width * height) / 4],
+        );
 
         // Encode
         let bframe = BFrame::new(
@@ -1436,13 +1436,13 @@ mod tests {
         let height = 8;
 
         // Create current frame with chroma at position 1,1
-        let mut current = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let mut current = SubSampleBlockGroup::new(
+            BlockDimensions { width, height },
+            Subsampling::Sample420,
+            vec![Block::<i16>::default(); width * height],
+            vec![Block::<i16>::default(); (width * height) / 4],
+            vec![Block::<i16>::default(); (width * height) / 4],
+        );
 
         let chroma_idx_1_1 = 1 * 4 + 1;
         for r in 0..8 {
@@ -1453,13 +1453,13 @@ mod tests {
         }
 
         // Create forward ref with chroma at position 0,0
-        let mut forward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let mut forward_ref = SubSampleBlockGroup::new(
+            BlockDimensions { width, height },
+            Subsampling::Sample420,
+            vec![Block::<i16>::default(); width * height],
+            vec![Block::<i16>::default(); (width * height) / 4],
+            vec![Block::<i16>::default(); (width * height) / 4],
+        );
 
         for r in 0..8 {
             for c in 0..8 {
@@ -1468,13 +1468,13 @@ mod tests {
             }
         }
 
-        let backward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let backward_ref = SubSampleBlockGroup::new(
+            BlockDimensions { width, height },
+            Subsampling::Sample420,
+            vec![Block::<i16>::default(); width * height],
+            vec![Block::<i16>::default(); (width * height) / 4],
+            vec![Block::<i16>::default(); (width * height) / 4],
+        );
 
         let bframe = BFrame::new(
             current.as_ref(),
@@ -1524,13 +1524,13 @@ mod tests {
         let height = 60;
 
         // Create current frame with specific chroma pattern
-        let mut current = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let mut current = SubSampleBlockGroup::new(
+            BlockDimensions { width, height },
+            Subsampling::Sample420,
+            vec![Block::<i16>::default(); width * height],
+            vec![Block::<i16>::default(); (width * height) / 4],
+            vec![Block::<i16>::default(); (width * height) / 4],
+        );
 
         // Set a pattern in chroma - bright blue region in center
         let chroma_width = width / 2;
@@ -1551,21 +1551,21 @@ mod tests {
             }
         }
 
-        let forward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let forward_ref = SubSampleBlockGroup::new(
+            BlockDimensions { width, height },
+            Subsampling::Sample420,
+            vec![Block::<i16>::default(); width * height],
+            vec![Block::<i16>::default(); (width * height) / 4],
+            vec![Block::<i16>::default(); (width * height) / 4],
+        );
 
-        let backward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let backward_ref = SubSampleBlockGroup::new(
+            BlockDimensions { width, height },
+            Subsampling::Sample420,
+            vec![Block::<i16>::default(); width * height],
+            vec![Block::<i16>::default(); (width * height) / 4],
+            vec![Block::<i16>::default(); (width * height) / 4],
+        );
 
         println!("\n=== Large Frame Chroma Test ===");
         println!("Frame: {}x{} blocks", width, height);
@@ -1646,13 +1646,13 @@ mod tests {
         let width = 16;
         let height = 16;
 
-        let mut current = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let mut current = SubSampleBlockGroup::new(
+            BlockDimensions { width, height },
+            Subsampling::Sample420,
+            vec![Block::<i16>::default(); width * height],
+            vec![Block::<i16>::default(); (width * height) / 4],
+            vec![Block::<i16>::default(); (width * height) / 4],
+        );
 
         // Set specific chroma pattern - alternating values
         let chroma_width = width / 2;
@@ -1669,21 +1669,21 @@ mod tests {
             }
         }
 
-        let forward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let forward_ref = SubSampleBlockGroup::new(
+            BlockDimensions { width, height },
+            Subsampling::Sample420,
+            vec![Block::<i16>::default(); width * height],
+            vec![Block::<i16>::default(); (width * height) / 4],
+            vec![Block::<i16>::default(); (width * height) / 4],
+        );
 
-        let backward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let backward_ref = SubSampleBlockGroup::new(
+            BlockDimensions { width, height },
+            Subsampling::Sample420,
+            vec![Block::<i16>::default(); width * height],
+            vec![Block::<i16>::default(); (width * height) / 4],
+            vec![Block::<i16>::default(); (width * height) / 4],
+        );
 
         println!("\n=== Macroblock Spanning Test ===");
 
@@ -1756,13 +1756,13 @@ mod tests {
         let height = 16;
 
         // Create current frame with distinct chroma
-        let mut current = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let mut current = SubSampleBlockGroup::new(
+            BlockDimensions { width, height },
+            Subsampling::Sample420,
+            vec![Block::<i16>::default(); width * height],
+            vec![Block::<i16>::default(); (width * height) / 4],
+            vec![Block::<i16>::default(); (width * height) / 4],
+        );
 
         // Set chroma values
         for idx in 0..current.cb.len() {
@@ -1775,13 +1775,13 @@ mod tests {
         }
 
         // Backward reference (different from current)
-        let mut backward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let mut backward_ref = SubSampleBlockGroup::new(
+            BlockDimensions { width, height },
+            Subsampling::Sample420,
+            vec![Block::<i16>::default(); width * height],
+            vec![Block::<i16>::default(); (width * height) / 4],
+            vec![Block::<i16>::default(); (width * height) / 4],
+        );
 
         for idx in 0..backward_ref.cb.len() {
             for r in 0..8 {

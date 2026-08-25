@@ -1,5 +1,3 @@
-use std::array::TryFromSliceError;
-
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("failed to convert block to a different type")]
@@ -9,7 +7,7 @@ pub enum Error {
     Io(#[from] std::io::Error),
 
     #[error("slice conversion error: {0}")]
-    SliceConversion(#[from] TryFromSliceError),
+    SliceConversion(#[from] std::array::TryFromSliceError),
 
     #[error("invalid data")]
     InvalidData,
@@ -37,6 +35,33 @@ pub enum Error {
 
     #[error("unsupported ANS data type: {0}-bit types not supported (only 8-bit and 16-bit)")]
     UnsupportedAnsDataType(usize),
+
+    #[error("invalid bit width: {0}")]
+    InvalidBitWidth(u8),
+
+    #[error("invalid bitstream alignment")]
+    InvalidAlignment,
+
+    #[error("bitstream position overflow")]
+    PositionOverflow,
+
+    #[error("invalid Rice parameter: {0}")]
+    InvalidRiceParameter(u8),
+
+    #[error("invalid Rice quotient: {0}")]
+    RiceQuotientOverflow(usize),
+
+    #[error("invalid symbol count: {0}")]
+    InvalidSymbolCount(usize),
+
+    #[error("invalid decoded length: {0}")]
+    InvalidDecodedLength(usize),
+
+    #[error("invalid frequency table")]
+    InvalidFrequencyTable,
+
+    #[error("allocation exceeds decoder limit: requested={requested}, maximum={maximum}")]
+    AllocationLimitExceeded { requested: usize, maximum: usize },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

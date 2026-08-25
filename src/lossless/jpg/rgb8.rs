@@ -58,8 +58,8 @@ where
     W: Write,
 {
     dimensions.encode(stream)?;
-    stream.write(depth)?;
-    stream.write(stride)?;
+    stream.write_u8(depth)?;
+    stream.write_u32(stride as u32)?;
 
     let depth = depth as usize;
     let PixelDimensions { width, height } = dimensions;
@@ -124,13 +124,9 @@ impl Decodable for Jpg<'_, Rgb8> {
         R: Read,
     {
         let dimensions = PixelDimensions::decode(stream)?;
-        let depth = stream
-            .read()?
-            .ok_or(Error::FailedToDecode("depth".to_owned()))?;
-        let stride = stream
-            .read()?
-            .ok_or(Error::FailedToDecode("stride".to_owned()))?;
-        let pixels = decompress(dimensions, depth, stride, stream)?;
+        let depth = stream.read_u8()?;
+        let stride = stream.read_u32()?;
+        let pixels = decompress(dimensions, depth, stride as usize, stream)?;
         Ok(ImageRgb8::new(
             dimensions,
             Rgb8::new(pixels),
@@ -147,13 +143,9 @@ impl Decodable for Jpg<'_, Rgba8> {
         R: Read,
     {
         let dimensions = PixelDimensions::decode(stream)?;
-        let depth = stream
-            .read()?
-            .ok_or(Error::FailedToDecode("depth".to_owned()))?;
-        let stride = stream
-            .read()?
-            .ok_or(Error::FailedToDecode("stride".to_owned()))?;
-        let pixels = decompress(dimensions, depth, stride, stream)?;
+        let depth = stream.read_u8()?;
+        let stride = stream.read_u32()?;
+        let pixels = decompress(dimensions, depth, stride as usize, stream)?;
         Ok(ImageRgba8::new(
             dimensions,
             Rgba8::new(pixels),

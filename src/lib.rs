@@ -3,7 +3,6 @@ use std::io::{Read, Write};
 use num_traits::{Bounded, FromPrimitive, ToPrimitive};
 
 pub mod bitstream;
-mod bitvec;
 pub mod block;
 pub mod color;
 mod dct;
@@ -50,5 +49,13 @@ pub(crate) fn clamp<T>(val: f64) -> T
 where
     T: Bounded + FromPrimitive + ToPrimitive,
 {
-    T::from_f64(val.clamp(0.0, T::max_value().to_f64().expect("to f64"))).expect("from f64")
+    T::from_f64(
+        val.clamp(
+            0.0,
+            T::max_value()
+                .to_f64()
+                .expect("numeric type must convert to f64"),
+        ),
+    )
+    .expect("clamped f64 must convert to target type")
 }
