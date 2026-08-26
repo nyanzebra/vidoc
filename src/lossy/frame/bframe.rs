@@ -23,17 +23,17 @@ use crate::{
     BitStreamReader, BitStreamWriter, Decodable, Encodable, Result,
 };
 
-pub struct BFrame<'a, T> {
-    current: SubSampleBlockGroupRef<'a, T>,
-    forward_ref: Option<SubSampleBlockGroupRef<'a, T>>,
-    backward_ref: SubSampleBlockGroupRef<'a, T>,
+pub(crate) struct BFrame<T> {
+    current: SubSampleBlockGroup<T>,
+    forward_ref: Option<SubSampleBlockGroup<T>>,
+    backward_ref: SubSampleBlockGroup<T>,
 }
 
-impl<'a, T> BFrame<'a, T> {
+impl<T> BFrame<T> {
     pub fn new(
-        current: SubSampleBlockGroupRef<'a, T>,
-        forward_ref: Option<SubSampleBlockGroupRef<'a, T>>,
-        backward_ref: SubSampleBlockGroupRef<'a, T>,
+        current: SubSampleBlockGroup<T>,
+        forward_ref: Option<SubSampleBlockGroup<T>>,
+        backward_ref: SubSampleBlockGroup<T>,
     ) -> Self {
         Self {
             current,
@@ -43,11 +43,11 @@ impl<'a, T> BFrame<'a, T> {
     }
 
     fn dimensions(&self) -> BlockDimensions {
-        self.current.dimensions
+        self.current.dimensions()
     }
 }
 
-impl Encodable for BFrame<'_, i16> {
+impl Encodable for BFrame<i16> {
     fn encode<W>(&self, stream: &mut BitStreamWriter<W>) -> Result<()>
     where
         W: Write,
@@ -60,7 +60,7 @@ impl Encodable for BFrame<'_, i16> {
     }
 }
 
-impl<const N: usize, T> Decodable for BFrame<'_, T>
+impl<const N: usize, T> Decodable for BFrame<T>
 where
     T: Debug + num_traits::FromBytes<Bytes = [u8; N]>,
 {
@@ -74,10 +74,10 @@ where
     }
 }
 
-impl BFrame<'_, i16> {
+impl BFrame<i16> {
     pub(crate) fn reassemble(
-        forward_ref: Option<&SubSampleBlockGroupRef<'_, i16>>,
-        backward_ref: &SubSampleBlockGroupRef<'_, i16>,
+        forward_ref: Option<SubSampleBlockGroupRef<'_, i16>>,
+        backward_ref: SubSampleBlockGroupRef<'_, i16>,
         macro_blocks: &[BMacroBlock<i16>],
     ) -> Result<SubSampleBlockGroup<i16>> {
         reassemble_frame(forward_ref, backward_ref, macro_blocks)
@@ -87,40 +87,40 @@ impl BFrame<'_, i16> {
         let motion_vecs = self.motion_vectors();
         let compressed = compressed_motion_vectors(&motion_vecs, &self.dimensions());
 
-        let mut macroblocks = Vec::new();
-        for ((prediction, _score), location) in compressed {
-            let (predicted_y, predicted_cb, predicted_cr) = build_predicted_blocks(
-                &location,
-                &prediction,
-                &self.current.dimensions,
-                self.current.subsampling,
-                self.forward_ref.as_ref(),
-                &self.backward_ref,
-            );
+        compressed
+            .into_par_iter()
+            .map(|((prediction, _score), location)| {
+                let (predicted_y, predicted_cb, predicted_cr) = build_predicted_blocks(
+                    &location,
+                    &prediction,
+                    &self.current.dimensions(),
+                    self.current.subsampling(),
+                    self.forward_ref.as_ref(),
+                    self.backward_ref.clone(),
+                );
 
-            let residuals = calculate_residuals_for_macroblock(
-                &location,
-                &self.current,
-                &predicted_y,
-                &predicted_cb,
-                &predicted_cr,
-            );
+                let residuals = calculate_residuals_for_macroblock(
+                    &location,
+                    self.current.clone(),
+                    &predicted_y,
+                    &predicted_cb,
+                    &predicted_cr,
+                );
 
-            macroblocks.push(BMacroBlock {
-                location,
-                prediction,
-                residuals,
-            });
-        }
-
-        macroblocks
+                BMacroBlock {
+                    location,
+                    prediction,
+                    residuals,
+                }
+            })
+            .collect()
     }
 
     fn motion_vectors(&self) -> Vec<Vec<(Prediction, i16)>> {
         let dimensions = self.dimensions();
-        let current_y = self.current.y;
-        let forward_y = self.forward_ref.as_ref().map(|f| f.y);
-        let backward_y = self.backward_ref.y;
+        let current_y = self.current.y();
+        let forward_y = self.forward_ref.as_ref().map(|f| f.y());
+        let backward_y = self.backward_ref.y();
 
         (0..dimensions.height)
             .into_par_iter()
@@ -132,7 +132,7 @@ impl BFrame<'_, i16> {
                             let current = &current_y[idx];
                             let point = Point { row, col };
 
-                            let (forward_mv, forward_cost) = if let Some(forward_ref) = forward_y {
+                            let (forward_mv, forward_cost) = if let Some(forward_ref) = forward_y.as_ref() {
                                 depth16::ldsp_blocks(current, forward_ref, &dimensions, point)
                             } else {
                                 // No forward reference - use zero MV with high cost
@@ -207,12 +207,12 @@ impl BFrame<'_, i16> {
         backward_mv: MotionVector,
     ) -> i16 {
         let dimensions = self.dimensions();
-        let backward_y = self.backward_ref.y;
+        let backward_y = &self.backward_ref.y();
         let backward_idx = mv_idx(point, backward_mv, &dimensions);
 
         // Check if we have a forward reference
         if let Some(forward_ref) = self.forward_ref.as_ref() {
-            let forward_y = forward_ref.y;
+            let forward_y = forward_ref.y();
             let forward_idx = mv_idx(point, forward_mv, &dimensions);
 
             if forward_idx >= forward_y.len() || backward_idx >= backward_y.len() {
@@ -243,7 +243,7 @@ fn mv_idx(point: Point, mv: MotionVector, dimensions: &BlockDimensions) -> usize
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{block::Block, FromBytes, ToBytes};
+    use crate::{lossy::tests::TestSubSampleBlockGroup, FromBytes, ToBytes};
 
     #[test]
     fn test_bprediction_mode_conversion() {
@@ -272,77 +272,37 @@ mod tests {
     #[test]
     fn test_bframe_basic_operations() {
         // Combined test for creation, motion vector calculation, and cost calculation
-        let test_blocks = create_test_blocks();
-        let forward_ref = create_test_subsample_block_group(&test_blocks);
-        let backward_ref = create_test_subsample_block_group(&test_blocks);
-        let current = create_test_subsample_block_group(&test_blocks);
+        let forward_ref = TestSubSampleBlockGroup::test_frame(8, 8, 0);
+        let backward_ref = TestSubSampleBlockGroup::test_frame(8, 8, 0);
+        let current = TestSubSampleBlockGroup::test_frame(8, 8, 0);
 
         // Test creation
         let bframe = BFrame::new(
-            current.as_ref(),
-            Some(forward_ref.as_ref()),
-            backward_ref.as_ref(),
+            current.clone().into(),
+            Some(forward_ref.clone().into()),
+            backward_ref.clone().into(),
         );
 
-        assert_eq!(bframe.dimensions(), current.dimensions);
-        assert_eq!(bframe.current.y.len(), current.y.len());
+        assert_eq!(bframe.dimensions(), current.as_ref().dimensions);
+        assert_eq!(bframe.current.y().len(), current.as_ref().y.len());
 
         // Test motion vector calculation
         let mvs = bframe.motion_vectors();
-        assert_eq!(mvs.len(), current.dimensions.height);
+        assert_eq!(mvs.len(), current.as_ref().dimensions.height);
         if !mvs.is_empty() {
-            assert_eq!(mvs[0].len(), current.dimensions.width);
+            assert_eq!(mvs[0].len(), current.as_ref().dimensions.width);
         }
 
         // Test bidirectional cost calculation
-        if !current.y.is_empty() {
+        if !current.as_ref().y.is_empty() {
             let cost = bframe.calculate_bidirectional_cost(
-                &current.y[0],
+                &current.as_ref().y[0],
                 Point { row: 0, col: 0 },
                 MotionVector { x: 0, y: 0 },
                 MotionVector { x: 0, y: 0 },
             );
 
             assert!(cost < i16::MAX);
-        }
-    }
-
-    fn create_test_blocks() -> Vec<Block<i16>> {
-        vec![Block::<i16>::default(); 16]
-    }
-
-    fn create_test_subsample_block_group(blocks: &[Block<i16>]) -> SubSampleBlockGroup<i16> {
-        use crate::color::Subsampling;
-
-        SubSampleBlockGroup {
-            dimensions: BlockDimensions {
-                width: 4,
-                height: 4,
-            },
-            subsampling: Subsampling::Sample420,
-            y: blocks.to_vec(),
-            cb: blocks.to_vec(),
-            cr: blocks.to_vec(),
-        }
-    }
-
-    // Helper to create test frame with specific luma value
-    fn create_test_frame(width: usize, height: usize, luma_value: i16) -> SubSampleBlockGroup<i16> {
-        use crate::color::Subsampling;
-
-        let mut block = Block::<i16>::default();
-        for r in 0..8 {
-            for c in 0..8 {
-                block.set(r, c, luma_value);
-            }
-        }
-
-        SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![block; width * height],
-            cb: vec![Block::<i16>::default(); width * height / 4],
-            cr: vec![Block::<i16>::default(); width * height / 4],
         }
     }
 
@@ -358,22 +318,19 @@ mod tests {
         let height = 8;
         let value = 100;
 
-        let current = create_test_frame(width, height, value);
-        let forward_ref = create_test_frame(width, height, value);
-        let backward_ref = create_test_frame(width, height, value);
+        let current = TestSubSampleBlockGroup::test_frame(width, height, value);
+        let forward_ref = TestSubSampleBlockGroup::test_frame(width, height, value);
+        let backward_ref = TestSubSampleBlockGroup::test_frame(width, height, value);
 
         // Create B-frame
         let bframe = BFrame::new(
-            current.as_ref(),
-            Some(forward_ref.as_ref()),
-            backward_ref.as_ref(),
+            current.clone().into(),
+            Some(forward_ref.clone().into()),
+            backward_ref.clone().into(),
         );
 
         // Get macroblocks
         let macroblocks = bframe.get_macroblocks();
-
-        println!("\nTest: Identical frames (all {})", value);
-        println!("Number of macroblocks: {}", macroblocks.len());
 
         assert!(
             !macroblocks.is_empty(),
@@ -432,14 +389,14 @@ mod tests {
 
         // Reassemble using decoded macroblocks
         let reconstructed = BFrame::reassemble(
-            Some(&forward_ref.as_ref()),
-            &backward_ref.as_ref(),
+            Some(forward_ref.as_ref()),
+            backward_ref.as_ref(),
             &decoded_macroblocks.into_inner(),
         )
         .expect("Reassembly should succeed");
 
         // Verify reconstructed is close to original
-        for (idx, recon) in reconstructed.y.iter().enumerate() {
+        for (idx, recon) in reconstructed.y().iter().enumerate() {
             let orig = &current.y[idx];
             for r in 0..8 {
                 for c in 0..8 {
@@ -455,22 +412,19 @@ mod tests {
         // Test: When frames differ, ensure all blocks are covered with residuals
         let width = 8;
         let height = 8;
-        let current = create_test_frame(width, height, 150);
-        let forward_ref = create_test_frame(width, height, 100);
-        let backward_ref = create_test_frame(width, height, 80);
+        let current = TestSubSampleBlockGroup::test_frame(width, height, 150);
+        let forward_ref = TestSubSampleBlockGroup::test_frame(width, height, 100);
+        let backward_ref = TestSubSampleBlockGroup::test_frame(width, height, 80);
 
         // Create B-frame
         let bframe = BFrame::new(
-            current.as_ref(),
-            Some(forward_ref.as_ref()),
-            backward_ref.as_ref(),
+            current.clone().into(),
+            Some(forward_ref.clone().into()),
+            backward_ref.clone().into(),
         );
 
         // Get macroblocks
         let macroblocks = bframe.get_macroblocks();
-
-        println!("\nTest: Different frames (current=150, forward=100, backward=80)");
-        println!("Number of macroblocks: {}", macroblocks.len());
 
         // Count total blocks covered by all macroblocks
         let mut total_blocks = 0;
@@ -480,16 +434,6 @@ mod tests {
             let blocks_in_mb = rows * cols;
             total_blocks += blocks_in_mb;
 
-            println!(
-                "Macroblock ({},{}) to ({},{}) covers {} blocks, has {} Y residuals",
-                mb.location.start.row,
-                mb.location.start.col,
-                mb.location.end.row,
-                mb.location.end.col,
-                blocks_in_mb,
-                mb.residuals.y.len()
-            );
-
             // Verify residuals count matches location
             assert_eq!(
                 mb.residuals.y.len(),
@@ -497,12 +441,6 @@ mod tests {
                 "Y residual count should match blocks in macroblock"
             );
         }
-
-        println!(
-            "Total blocks covered: {} out of {} in frame",
-            total_blocks,
-            width * height
-        );
 
         // CRITICAL TEST: Verify 100% block coverage
         assert_eq!(
@@ -513,8 +451,8 @@ mod tests {
 
         // Reassemble
         let reconstructed = BFrame::reassemble(
-            Some(&forward_ref.as_ref()),
-            &backward_ref.as_ref(),
+            Some(forward_ref.as_ref()),
+            backward_ref.as_ref(),
             &macroblocks,
         )
         .expect("Reassembly should succeed");
@@ -523,7 +461,7 @@ mod tests {
         let mut total_error_to_current = 0i64;
         let mut total_error_to_forward = 0i64;
 
-        for (idx, recon) in reconstructed.y.iter().enumerate() {
+        for (idx, recon) in reconstructed.y().iter().enumerate() {
             let curr = &current.y[idx];
             let fwd = &forward_ref.y[idx];
 
@@ -539,12 +477,6 @@ mod tests {
             }
         }
 
-        println!("Total error to current: {}", total_error_to_current);
-        println!(
-            "Total error to forward reference: {}",
-            total_error_to_forward
-        );
-
         // Reconstructed should be much closer to current than to forward reference
         assert!(
             total_error_to_current < total_error_to_forward / 2,
@@ -558,14 +490,14 @@ mod tests {
         let width = 4;
         let height = 4;
 
-        let current = create_test_frame(width, height, 120);
-        let forward_ref = create_test_frame(width, height, 100);
-        let backward_ref = create_test_frame(width, height, 80);
+        let current = TestSubSampleBlockGroup::test_frame(width, height, 120);
+        let forward_ref = TestSubSampleBlockGroup::test_frame(width, height, 100);
+        let backward_ref = TestSubSampleBlockGroup::test_frame(width, height, 80);
 
         let bframe = BFrame::new(
-            current.as_ref(),
-            Some(forward_ref.as_ref()),
-            backward_ref.as_ref(),
+            current.clone().into(),
+            Some(forward_ref.clone().into()),
+            backward_ref.clone().into(),
         );
         let macroblocks = bframe.get_macroblocks();
 
@@ -573,8 +505,8 @@ mod tests {
 
         // Test reassembly
         let reconstructed = BFrame::reassemble(
-            Some(&forward_ref.as_ref()),
-            &backward_ref.as_ref(),
+            Some(forward_ref.as_ref()),
+            backward_ref.as_ref(),
             &macroblocks,
         )
         .expect("Reassembly should succeed");
@@ -603,7 +535,7 @@ mod tests {
         let mut diff_from_forward = 0i64;
         let mut diff_from_backward = 0i64;
 
-        for (idx, recon) in reconstructed.y.iter().enumerate() {
+        for (idx, recon) in reconstructed.y().iter().enumerate() {
             let fwd = &forward_ref.y[idx];
             let bwd = &backward_ref.y[idx];
 
@@ -632,14 +564,14 @@ mod tests {
         let height = 4;
 
         // Create scenario where bi-directional might be chosen
-        let current = create_test_frame(width, height, 90);
-        let forward_ref = create_test_frame(width, height, 100);
-        let backward_ref = create_test_frame(width, height, 80);
+        let current = TestSubSampleBlockGroup::test_frame(width, height, 90);
+        let forward_ref = TestSubSampleBlockGroup::test_frame(width, height, 100);
+        let backward_ref = TestSubSampleBlockGroup::test_frame(width, height, 80);
 
         let bframe = BFrame::new(
-            current.as_ref(),
-            Some(forward_ref.as_ref()),
-            backward_ref.as_ref(),
+            current.clone().into(),
+            Some(forward_ref.clone().into()),
+            backward_ref.clone().into(),
         );
         let macroblocks = bframe.get_macroblocks();
 
@@ -658,11 +590,6 @@ mod tests {
             }
         }
 
-        println!(
-            "Prediction types: forward={}, backward={}, both={}",
-            has_forward, has_backward, has_both
-        );
-
         // At least one prediction type should be used
         assert!(
             has_forward || has_backward || has_both,
@@ -671,14 +598,14 @@ mod tests {
 
         // Verify reassembly works with all prediction types
         let reconstructed = BFrame::reassemble(
-            Some(&forward_ref.as_ref()),
-            &backward_ref.as_ref(),
+            Some(forward_ref.as_ref()),
+            backward_ref.as_ref(),
             &macroblocks,
         )
         .expect("Reassembly should succeed with all prediction types");
 
         assert_eq!(
-            reconstructed.y.len(),
+            reconstructed.y().len(),
             current.y.len(),
             "Reconstructed should have same number of blocks"
         );
@@ -688,7 +615,6 @@ mod tests {
     fn test_bframe_chroma_motion_vector_scaling() {
         // CRITICAL TEST: Verify chroma motion vectors are correctly scaled for 4:2:0
         // This tests the core issue with colored square artifacts
-        use crate::color::Subsampling;
 
         // Create 8x8 luma blocks (8 blocks wide x 8 blocks tall)
         // Chroma will be 4x4 blocks for 4:2:0 subsampling
@@ -696,30 +622,9 @@ mod tests {
         let height = 8;
 
         // Create frames with distinct values to test motion compensation
-        let mut current = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            // 4x4 chroma blocks
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
-
-        let mut forward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
-
-        let mut backward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let mut current = TestSubSampleBlockGroup::test_frame(width, height, 0);
+        let mut forward_ref = TestSubSampleBlockGroup::test_frame(width, height, 0);
+        let mut backward_ref = TestSubSampleBlockGroup::test_frame(width, height, 0);
 
         // Set specific chroma values in forward reference
         // Cb channel: set first block to 100
@@ -748,42 +653,36 @@ mod tests {
 
         // Create B-frame
         let bframe = BFrame::new(
-            current.as_ref(),
-            Some(forward_ref.as_ref()),
-            backward_ref.as_ref(),
+            current.clone().into(),
+            Some(forward_ref.clone().into()),
+            backward_ref.clone().into(),
         );
 
         let macroblocks = bframe.get_macroblocks();
 
         // Reassemble with chroma
         let reconstructed = BFrame::reassemble(
-            Some(&forward_ref.as_ref()),
-            &backward_ref.as_ref(),
+            Some(forward_ref.as_ref()),
+            backward_ref.as_ref(),
             &macroblocks,
         )
         .expect("Reassembly should succeed");
 
-        println!(
-            "\nChroma test: {} luma blocks, {} chroma blocks",
-            reconstructed.y.len(),
-            reconstructed.cb.len()
-        );
-
         // CRITICAL VERIFICATION: Check that chroma was reconstructed
         assert_eq!(
-            reconstructed.cb.len(),
+            reconstructed.cb().len(),
             (width * height) / 4,
             "Chroma should have 1/4 the blocks of luma for 4:2:0"
         );
         assert_eq!(
-            reconstructed.cr.len(),
+            reconstructed.cr().len(),
             (width * height) / 4,
             "Chroma should have 1/4 the blocks of luma for 4:2:0"
         );
 
         // Verify first chroma block was reconstructed (should be close to forward ref)
-        let cb_block = &reconstructed.cb[0];
-        let cr_block = &reconstructed.cr[0];
+        let cb_block = &reconstructed.cb()[0];
+        let cr_block = &reconstructed.cr()[0];
 
         let mut cb_avg = 0i32;
         let mut cr_avg = 0i32;
@@ -795,9 +694,6 @@ mod tests {
         }
         cb_avg /= 64;
         cr_avg /= 64;
-
-        println!("Reconstructed Cb average: {} (expected ~100)", cb_avg);
-        println!("Reconstructed Cr average: {} (expected ~200)", cr_avg);
 
         // Allow some tolerance for quantization/compression
         assert!(
@@ -814,7 +710,7 @@ mod tests {
         // Verify chroma is NOT just zeros (common bug)
         let mut has_nonzero_cb = false;
         let mut has_nonzero_cr = false;
-        for block in &reconstructed.cb {
+        for block in reconstructed.cb() {
             for r in 0..8 {
                 for c in 0..8 {
                     if block.get(r, c).abs() > 10 {
@@ -824,7 +720,7 @@ mod tests {
                 }
             }
         }
-        for block in &reconstructed.cr {
+        for block in reconstructed.cr() {
             for r in 0..8 {
                 for c in 0..8 {
                     if block.get(r, c).abs() > 10 {
@@ -843,19 +739,12 @@ mod tests {
     fn test_bframe_chroma_with_motion() {
         // Test chroma reconstruction when motion vectors are non-zero
         // This specifically tests the motion vector scaling from luma to chroma
-        use crate::color::Subsampling;
 
         let width = 8;
         let height = 8;
 
         // Create frames where content has moved
-        let mut forward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let mut forward_ref = TestSubSampleBlockGroup::test_frame(width, height, 0);
 
         // Put a chroma "feature" at position (1, 1) - second chroma block row/col
         // Row 1, Col 1 in 4x4 chroma grid
@@ -868,13 +757,7 @@ mod tests {
         }
 
         // Current frame: same "feature" but needs motion compensation to find it
-        let mut current = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let mut current = TestSubSampleBlockGroup::test_frame(width, height, 0);
 
         // Put same chroma feature at same location
         for r in 0..8 {
@@ -884,34 +767,28 @@ mod tests {
             }
         }
 
-        let backward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let backward_ref = TestSubSampleBlockGroup::test_frame(width, height, 0);
 
         // Create B-frame
         let bframe = BFrame::new(
-            current.as_ref(),
-            Some(forward_ref.as_ref()),
-            backward_ref.as_ref(),
+            current.clone().into(),
+            Some(forward_ref.clone().into()),
+            backward_ref.clone().into(),
         );
 
         let macroblocks = bframe.get_macroblocks();
 
         // Reassemble
         let reconstructed = BFrame::reassemble(
-            Some(&forward_ref.as_ref()),
-            &backward_ref.as_ref(),
+            Some(forward_ref.as_ref()),
+            backward_ref.as_ref(),
             &macroblocks,
         )
         .expect("Reassembly should succeed");
 
         // Verify the chroma "feature" was reconstructed
-        let recon_cb = &reconstructed.cb[chroma_idx];
-        let recon_cr = &reconstructed.cr[chroma_idx];
+        let recon_cb = &reconstructed.cb()[chroma_idx];
+        let recon_cr = &reconstructed.cr()[chroma_idx];
 
         let mut cb_avg = 0i32;
         let mut cr_avg = 0i32;
@@ -923,11 +800,6 @@ mod tests {
         }
         cb_avg /= 64;
         cr_avg /= 64;
-
-        println!(
-            "Chroma feature at block {}: Cb={}, Cr={}",
-            chroma_idx, cb_avg, cr_avg
-        );
 
         // The feature should be reconstructed with reasonable accuracy
         assert!(
@@ -946,20 +818,13 @@ mod tests {
     fn test_motion_vector_coordinate_system() {
         // CRITICAL TEST: Verify the coordinate system of motion vectors
         // This test documents and verifies how motion vectors map to blocks
-        use crate::color::Subsampling;
 
         let width = 8;
         let height = 8;
 
         // Create a distinctive pattern in forward reference
         // We'll put a unique value in each luma block to track motion
-        let mut forward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let mut forward_ref = TestSubSampleBlockGroup::test_frame(width, height, 0);
 
         // Set luma block at position (2, 2) to value 100
         // Row 2, Col 2
@@ -982,13 +847,7 @@ mod tests {
         }
 
         // Create current frame with same pattern at position (3, 3)
-        let mut current = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let mut current = TestSubSampleBlockGroup::test_frame(width, height, 0);
 
         let luma_idx_3_3 = 3 * width + 3;
         for r in 0..8 {
@@ -1005,85 +864,42 @@ mod tests {
             }
         }
 
-        let backward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let backward_ref = TestSubSampleBlockGroup::test_frame(width, height, 0);
 
         // Debug: Print what's in the forward reference
-        println!("\n=== Forward Reference ===");
-        println!("Forward Cb[0] average: {}", {
-            let mut sum = 0i32;
-            for r in 0..8 {
-                for c in 0..8 {
-                    sum += forward_ref.cb[0].get(r, c) as i32;
-                }
-            }
-            sum / 64
-        });
-        println!("Forward Cb[{}] average: {}", chroma_idx_1_1, {
-            let mut sum = 0i32;
-            for r in 0..8 {
-                for c in 0..8 {
-                    sum += forward_ref.cb[chroma_idx_1_1].get(r, c) as i32;
-                }
-            }
-            sum / 64
-        });
 
         // Create B-frame and examine motion vectors
         let bframe = BFrame::new(
-            current.as_ref(),
-            Some(forward_ref.as_ref()),
-            backward_ref.as_ref(),
+            current.clone().into(),
+            Some(forward_ref.clone().into()),
+            backward_ref.clone().into(),
         );
 
         let macroblocks = bframe.get_macroblocks();
 
         // Print ALL macroblocks to understand chroma updates
-        println!("\n=== Motion Vector Coordinate System Test ===");
-        println!("Pattern at luma (2,2) in forward ref");
-        println!("Pattern at luma (3,3) in current frame");
-        println!("Expected motion vector: (1, 1) in block coordinates OR (2, 2) in half-pixels");
-        println!("\n=== ALL Macroblocks ===");
-        println!("Total macroblocks: {}", macroblocks.len());
 
         for (idx, mb) in macroblocks.iter().enumerate() {
-            println!(
-                "MB{}: rows {}-{}, cols {}-{}, MV={:?}",
-                idx,
-                mb.location.start.row,
-                mb.location.end.row,
-                mb.location.start.col,
-                mb.location.end.col,
-                mb.prediction
-            );
-
             // Specifically track which chroma blocks this affects
             for luma_r in mb.location.start.row..=mb.location.end.row {
                 for luma_c in mb.location.start.col..=mb.location.end.col {
                     let chroma_r = luma_r / 2;
                     let chroma_c = luma_c / 2;
-                    if chroma_r == 1 && chroma_c == 1 {
-                        println!("  -> Affects chroma (1,1) via luma ({},{})", luma_r, luma_c);
-                    }
+                    if chroma_r == 1 && chroma_c == 1 {}
                 }
             }
         }
 
         // Reassemble and verify
         let reconstructed = BFrame::reassemble(
-            Some(&forward_ref.as_ref()),
-            &backward_ref.as_ref(),
+            Some(forward_ref.as_ref()),
+            backward_ref.as_ref(),
             &macroblocks,
         )
         .expect("Reassembly should succeed");
 
         // Verify the luma block at (3,3) was reconstructed correctly
-        let recon_luma = &reconstructed.y[luma_idx_3_3];
+        let recon_luma = &reconstructed.y()[luma_idx_3_3];
         let mut luma_avg = 0i32;
         for r in 0..8 {
             for c in 0..8 {
@@ -1092,9 +908,6 @@ mod tests {
         }
         luma_avg /= 64;
 
-        println!("\n=== Reconstructed Results ===");
-        println!("Reconstructed luma at (3,3): {} (expected ~100)", luma_avg);
-
         assert!(
             luma_avg > 50,
             "Luma should be reconstructed from forward ref, got {}",
@@ -1102,7 +915,7 @@ mod tests {
         );
 
         // Verify chroma was also reconstructed
-        let recon_cb = &reconstructed.cb[chroma_idx_1_1];
+        let recon_cb = &reconstructed.cb()[chroma_idx_1_1];
         let mut cb_avg = 0i32;
         for r in 0..8 {
             for c in 0..8 {
@@ -1110,11 +923,6 @@ mod tests {
             }
         }
         cb_avg /= 64;
-
-        println!(
-            "Reconstructed chroma Cb at (1,1): {} (expected ~150)",
-            cb_avg
-        );
 
         // Also check what the base_cb had
         let base_cb_at_1_1 = {
@@ -1126,7 +934,6 @@ mod tests {
             }
             sum / 64
         };
-        println!("Base_cb (from forward ref) at (1,1): {}", base_cb_at_1_1);
 
         assert!(
             cb_avg > 100,
@@ -1139,19 +946,12 @@ mod tests {
     #[test]
     fn test_chroma_residuals_stored_and_retrieved() {
         // Test that chroma residuals are actually stored in macroblocks
-        use crate::color::Subsampling;
 
         let width = 8;
         let height = 8;
 
         // Create frames with different chroma values
-        let mut current = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let mut current = TestSubSampleBlockGroup::test_frame(width, height, 0);
 
         // Set distinct chroma values
         for idx in 0..current.cb.len() {
@@ -1163,31 +963,16 @@ mod tests {
             }
         }
 
-        let forward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let forward_ref = TestSubSampleBlockGroup::test_frame(width, height, 0);
 
-        let backward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let backward_ref = TestSubSampleBlockGroup::test_frame(width, height, 0);
 
         let bframe = BFrame::new(
-            current.as_ref(),
-            Some(forward_ref.as_ref()),
-            backward_ref.as_ref(),
+            current.clone().into(),
+            Some(forward_ref.clone().into()),
+            backward_ref.clone().into(),
         );
         let macroblocks = bframe.get_macroblocks();
-
-        println!("\n=== Chroma Residuals Test ===");
-        println!("Total macroblocks: {}", macroblocks.len());
 
         let mut has_cb_residuals = false;
         let mut has_cr_residuals = false;
@@ -1221,43 +1006,20 @@ mod tests {
     #[test]
     fn test_chroma_residuals_no_duplicates() {
         // Test that we don't store duplicate chroma residuals for 4:2:0
-        use crate::color::Subsampling;
 
         let width = 8;
         let height = 8;
 
-        let current = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
-
-        let forward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
-
-        let backward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let current = TestSubSampleBlockGroup::test_frame(width, height, 0);
+        let forward_ref = TestSubSampleBlockGroup::test_frame(width, height, 0);
+        let backward_ref = TestSubSampleBlockGroup::test_frame(width, height, 0);
 
         let bframe = BFrame::new(
-            current.as_ref(),
-            Some(forward_ref.as_ref()),
-            backward_ref.as_ref(),
+            current.clone().into(),
+            Some(forward_ref.clone().into()),
+            backward_ref.clone().into(),
         );
         let macroblocks = bframe.get_macroblocks();
-
-        println!("\n=== Chroma Residuals Deduplication Test ===");
 
         for (idx, mb) in macroblocks.iter().enumerate() {
             // Calculate how many luma blocks in this macroblock
@@ -1266,15 +1028,6 @@ mod tests {
 
             // For 4:2:0, chroma should have 1/4 the blocks of luma (or fewer due to deduplication)
             let expected_max_chroma = luma_count.div_ceil(4);
-
-            println!(
-                "MB{}: luma_blocks={}, cb_residuals={}, cr_residuals={}, expected_max={}",
-                idx,
-                luma_count,
-                mb.residuals.cb.len(),
-                mb.residuals.cr.len(),
-                expected_max_chroma
-            );
 
             assert!(
                 mb.residuals.cb.len() <= expected_max_chroma,
@@ -1299,19 +1052,12 @@ mod tests {
     #[test]
     fn test_chroma_residuals_roundtrip() -> crate::error::Result<()> {
         // Test that chroma residuals survive encode/decode roundtrip
-        use crate::{color::Subsampling, lossy::frame::r#macro::BMacroBlock};
 
         let width = 4;
         let height = 4;
 
         // Create a current frame with specific chroma values
-        let mut current = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let mut current = TestSubSampleBlockGroup::test_frame(width, height, 0);
 
         // Set specific chroma values - these will require residuals
         for r in 0..8 {
@@ -1321,41 +1067,22 @@ mod tests {
             }
         }
 
-        let forward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
-
-        let backward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let forward_ref = TestSubSampleBlockGroup::test_frame(width, height, 0);
+        let backward_ref = TestSubSampleBlockGroup::test_frame(width, height, 0);
 
         // Encode
         let bframe = BFrame::new(
-            current.as_ref(),
-            Some(forward_ref.as_ref()),
-            backward_ref.as_ref(),
+            current.clone().into(),
+            Some(forward_ref.clone().into()),
+            backward_ref.clone().into(),
         );
         let macroblocks = bframe.get_macroblocks();
-
-        println!("\n=== Chroma Residuals Roundtrip Test ===");
-        println!("Original Cb[0] center: {}", current.cb[0].get(4, 4));
-        println!("Original Cr[0] center: {}", current.cr[0].get(4, 4));
 
         // Serialize and deserialize macroblocks
         let mut serialized = Vec::new();
         for mb in &macroblocks {
             serialized.extend_from_slice(&mb.to_bytes());
         }
-
-        println!("Serialized {} bytes", serialized.len());
 
         // Deserialize
         let mut deserialized_mbs = Vec::new();
@@ -1365,8 +1092,6 @@ mod tests {
             deserialized_mbs.push(mb);
             offset += bytes_read;
         }
-
-        println!("Deserialized {} macroblocks", deserialized_mbs.len());
 
         // Check that chroma residuals survived
         for (idx, (orig, deser)) in macroblocks.iter().zip(deserialized_mbs.iter()).enumerate() {
@@ -1382,34 +1107,21 @@ mod tests {
                 "MB{}: Cr residual count mismatch",
                 idx
             );
-
-            println!(
-                "MB{}: Cb residuals survived={}, Cr residuals survived={}",
-                idx,
-                deser.residuals.cb.len(),
-                deser.residuals.cr.len()
-            );
         }
 
         // Reconstruct and verify chroma is correct
         let reconstructed = BFrame::reassemble(
-            Some(&forward_ref.as_ref()),
-            &backward_ref.as_ref(),
+            Some(forward_ref.as_ref()),
+            backward_ref.as_ref(),
             &deserialized_mbs,
         )?;
 
-        let recon_cb = reconstructed.cb[0].get(4, 4);
-        let recon_cr = reconstructed.cr[0].get(4, 4);
-
-        println!("Reconstructed Cb[0] center: {}", recon_cb);
-        println!("Reconstructed Cr[0] center: {}", recon_cr);
+        let recon_cb = reconstructed.cb()[0].get(4, 4);
+        let recon_cr = reconstructed.cr()[0].get(4, 4);
 
         // Should be close to original (within quantization error)
         let cb_error = (recon_cb - current.cb[0].get(4, 4)).abs();
         let cr_error = (recon_cr - current.cr[0].get(4, 4)).abs();
-
-        println!("Cb error: {}", cb_error);
-        println!("Cr error: {}", cr_error);
 
         assert!(
             cb_error < 30,
@@ -1427,20 +1139,11 @@ mod tests {
 
     #[test]
     fn test_chroma_residuals_with_motion_vectors() -> crate::error::Result<()> {
-        // Test chroma residuals with non-zero motion vectors
-        use crate::color::Subsampling;
-
         let width = 8;
         let height = 8;
 
         // Create current frame with chroma at position 1,1
-        let mut current = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let mut current = TestSubSampleBlockGroup::test_frame(width, height, 0);
 
         let chroma_idx_1_1 = 1 * 4 + 1;
         for r in 0..8 {
@@ -1451,13 +1154,7 @@ mod tests {
         }
 
         // Create forward ref with chroma at position 0,0
-        let mut forward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let mut forward_ref = TestSubSampleBlockGroup::test_frame(width, height, 0);
 
         for r in 0..8 {
             for c in 0..8 {
@@ -1466,41 +1163,26 @@ mod tests {
             }
         }
 
-        let backward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let backward_ref = TestSubSampleBlockGroup::test_frame(width, height, 0);
 
         let bframe = BFrame::new(
-            current.as_ref(),
-            Some(forward_ref.as_ref()),
-            backward_ref.as_ref(),
+            current.clone().into(),
+            Some(forward_ref.clone().into()),
+            backward_ref.clone().into(),
         );
         let macroblocks = bframe.get_macroblocks();
 
-        println!("\n=== Chroma with Motion Vectors Test ===");
-        println!(
-            "Current Cb at (1,1): {}",
-            current.cb[chroma_idx_1_1].get(4, 4)
-        );
-        println!("Forward Cb at (0,0): {}", forward_ref.cb[0].get(4, 4));
-
         // Reconstruct
         let reconstructed = BFrame::reassemble(
-            Some(&forward_ref.as_ref()),
-            &backward_ref.as_ref(),
+            Some(forward_ref.as_ref()),
+            backward_ref.as_ref(),
             &macroblocks,
         )?;
 
-        let recon_cb = reconstructed.cb[chroma_idx_1_1].get(4, 4);
-        println!("Reconstructed Cb at (1,1): {}", recon_cb);
+        let recon_cb = reconstructed.cb()[chroma_idx_1_1].get(4, 4);
 
         // With motion compensation and residuals, should be close to original
         let error = (recon_cb - current.cb[chroma_idx_1_1].get(4, 4)).abs();
-        println!("Reconstruction error: {}", error);
 
         assert!(
             error < 30,
@@ -1514,7 +1196,6 @@ mod tests {
     #[test]
     fn test_chroma_residuals_large_frame() -> crate::error::Result<()> {
         // Test with frame size similar to real video (88x60 for 704×480)
-        use crate::color::Subsampling;
 
         // 704 pixels / 8 = 88 blocks
         let width = 88;
@@ -1522,13 +1203,7 @@ mod tests {
         let height = 60;
 
         // Create current frame with specific chroma pattern
-        let mut current = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let mut current = TestSubSampleBlockGroup::test_frame(width, height, 0);
 
         // Set a pattern in chroma - bright blue region in center
         let chroma_width = width / 2;
@@ -1549,35 +1224,16 @@ mod tests {
             }
         }
 
-        let forward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
-
-        let backward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
-
-        println!("\n=== Large Frame Chroma Test ===");
-        println!("Frame: {}x{} blocks", width, height);
-        println!("Chroma: {}x{} blocks", chroma_width, chroma_height);
+        let forward_ref = TestSubSampleBlockGroup::test_frame(width, height, 0);
+        let backward_ref = TestSubSampleBlockGroup::test_frame(width, height, 0);
 
         // Encode
         let bframe = BFrame::new(
-            current.as_ref(),
-            Some(forward_ref.as_ref()),
-            backward_ref.as_ref(),
+            current.clone().into(),
+            Some(forward_ref.clone().into()),
+            backward_ref.clone().into(),
         );
         let macroblocks = bframe.get_macroblocks();
-
-        println!("Total macroblocks: {}", macroblocks.len());
 
         // Count total residuals
         let total_cb_residuals: usize = macroblocks.iter().map(|mb| mb.residuals.cb.len()).sum();
@@ -1588,8 +1244,8 @@ mod tests {
 
         // Reconstruct
         let reconstructed = BFrame::reassemble(
-            Some(&forward_ref.as_ref()),
-            &backward_ref.as_ref(),
+            Some(forward_ref.as_ref()),
+            backward_ref.as_ref(),
             &macroblocks,
         )?;
 
@@ -1601,7 +1257,7 @@ mod tests {
                 let idx = r * chroma_width + c;
                 if idx < current.cb.len() {
                     let original_cb = current.cb[idx].get(4, 4);
-                    let recon_cb = reconstructed.cb[idx].get(4, 4);
+                    let recon_cb = reconstructed.cb()[idx].get(4, 4);
                     let error = (recon_cb - original_cb).abs();
 
                     if error > max_error {
@@ -1610,19 +1266,11 @@ mod tests {
 
                     if error > 30 {
                         errors += 1;
-                        if errors <= 3 {
-                            println!(
-                                "Large error at chroma ({}, {}): original={}, reconstructed={}, error={}",
-                                r, c, original_cb, recon_cb, error
-                            );
-                        }
+                        if errors <= 3 {}
                     }
                 }
             }
         }
-
-        println!("Max reconstruction error: {}", max_error);
-        println!("Blocks with error > 30: {}", errors);
 
         assert!(
             max_error < 30,
@@ -1638,19 +1286,12 @@ mod tests {
         // Test edge case: macroblock that spans multiple chroma blocks
         // With 4:2:0, a 16x16 macroblock (4 luma blocks) maps to ONE 8x8 chroma block
         // But what if motion estimation creates odd-sized macroblocks?
-        use crate::color::Subsampling;
 
         // Small test case
         let width = 16;
         let height = 16;
 
-        let mut current = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let mut current = TestSubSampleBlockGroup::test_frame(width, height, 0);
 
         // Set specific chroma pattern - alternating values
         let chroma_width = width / 2;
@@ -1667,32 +1308,15 @@ mod tests {
             }
         }
 
-        let forward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
-
-        let backward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
-
-        println!("\n=== Macroblock Spanning Test ===");
+        let forward_ref = TestSubSampleBlockGroup::test_frame(width, height, 0);
+        let backward_ref = TestSubSampleBlockGroup::test_frame(width, height, 0);
 
         let bframe = BFrame::new(
-            current.as_ref(),
-            Some(forward_ref.as_ref()),
-            backward_ref.as_ref(),
+            current.clone().into(),
+            Some(forward_ref.clone().into()),
+            backward_ref.clone().into(),
         );
         let macroblocks = bframe.get_macroblocks();
-
-        println!("Macroblocks: {}", macroblocks.len());
 
         // Print detailed info about each macroblock
         for (idx, mb) in macroblocks.iter().enumerate() {
@@ -1713,8 +1337,8 @@ mod tests {
 
         // Reconstruct
         let reconstructed = BFrame::reassemble(
-            Some(&forward_ref.as_ref()),
-            &backward_ref.as_ref(),
+            Some(forward_ref.as_ref()),
+            backward_ref.as_ref(),
             &macroblocks,
         )?;
 
@@ -1724,20 +1348,14 @@ mod tests {
             for c in 0..chroma_width {
                 let idx = r * chroma_width + c;
                 let orig_cb = current.cb[idx].get(4, 4);
-                let recon_cb = reconstructed.cb[idx].get(4, 4);
+                let recon_cb = reconstructed.cb()[idx].get(4, 4);
                 let error = (recon_cb - orig_cb).abs();
 
                 if error > 30 {
-                    println!(
-                        "Error at chroma ({},{}): orig={}, recon={}, error={}",
-                        r, c, orig_cb, recon_cb, error
-                    );
                     errors += 1;
                 }
             }
         }
-
-        println!("Total errors > 30: {}", errors);
 
         assert_eq!(errors, 0, "Should have no reconstruction errors");
 
@@ -1748,19 +1366,12 @@ mod tests {
     fn test_bframe_without_forward_ref() -> crate::error::Result<()> {
         // Test B-frame encoding/decoding when forward_ref is None
         // This mimics what happens in GOP encoding
-        use crate::color::Subsampling;
 
         let width = 16;
         let height = 16;
 
         // Create current frame with distinct chroma
-        let mut current = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let mut current = TestSubSampleBlockGroup::test_frame(width, height, 0);
 
         // Set chroma values
         for idx in 0..current.cb.len() {
@@ -1773,13 +1384,7 @@ mod tests {
         }
 
         // Backward reference (different from current)
-        let mut backward_ref = SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![Block::<i16>::default(); width * height],
-            cb: vec![Block::<i16>::default(); (width * height) / 4],
-            cr: vec![Block::<i16>::default(); (width * height) / 4],
-        };
+        let mut backward_ref = TestSubSampleBlockGroup::test_frame(width, height, 0);
 
         for idx in 0..backward_ref.cb.len() {
             for r in 0..8 {
@@ -1790,12 +1395,8 @@ mod tests {
             }
         }
 
-        println!("\n=== B-frame without forward_ref test ===");
-        println!("Current Cb[0]: {}", current.cb[0].get(4, 4));
-        println!("Backward Cb[0]: {}", backward_ref.cb[0].get(4, 4));
-
         // Encode with forward_ref=None (like GOP does)
-        let bframe = BFrame::new(current.as_ref(), None, backward_ref.as_ref());
+        let bframe = BFrame::new(current.clone().into(), None, backward_ref.clone().into());
         let macroblocks = bframe.get_macroblocks();
 
         println!("Macroblocks: {}", macroblocks.len());
@@ -1838,13 +1439,13 @@ mod tests {
         );
 
         // Decode with forward_ref=None
-        let reconstructed = BFrame::reassemble(None, &backward_ref.as_ref(), &macroblocks)?;
+        let reconstructed = BFrame::reassemble(None, backward_ref.as_ref(), &macroblocks)?;
 
         // Check reconstruction
         let mut max_error = 0;
         for idx in 0..current.cb.len() {
             let orig = current.cb[idx].get(4, 4);
-            let recon = reconstructed.cb[idx].get(4, 4);
+            let recon = reconstructed.cb()[idx].get(4, 4);
             let error = (orig - recon).abs();
             if error > max_error {
                 max_error = error;
@@ -1856,8 +1457,6 @@ mod tests {
                 );
             }
         }
-
-        println!("Max Cb error: {}", max_error);
 
         assert!(
             max_error < 30,

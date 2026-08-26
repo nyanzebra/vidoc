@@ -1,7 +1,6 @@
 use std::io::{Read, Write};
 
 use num_traits::{ops::bytes::ToBytes, FromBytes, PrimInt};
-use rayon::iter::{IntoParallelRefIterator as _, ParallelIterator as _};
 
 use crate::{
     bitstream::{BitStreamReader, BitStreamWriter},
@@ -37,10 +36,7 @@ pub(crate) fn encode<T>(data: &[T], stream: &mut BitStreamWriter<impl Write>) ->
 where
     T: crate::ToBytes + Sync,
 {
-    let data = data
-        .par_iter()
-        .flat_map(|x| x.to_bytes())
-        .collect::<Vec<u8>>();
+    let data = data.iter().flat_map(|x| x.to_bytes()).collect::<Vec<u8>>();
 
     encode_raw::<BYTE_SIZE_U8, u8, _>(&data, stream)?;
 
@@ -221,10 +217,17 @@ where
 {
     let raw: Vec<u8> = decode_raw(stream)?;
     let mut start = 0;
-    let mut res = vec![];
+    let item_size = std::mem::size_of::<T>();
+    let mut res = Vec::with_capacity(raw.len().checked_div(item_size).unwrap_or_default());
     while start < raw.len() {
         let (block, end) = T::from_bytes(&raw[start..]);
-        assert_ne!(end, 0, "not enough stuff");
+        debug_assert_ne!(
+            end, 0,
+            "from_bytes returned zero advance — infinite loop risk"
+        );
+        if end == 0 {
+            break;
+        }
         res.push(block);
         start += end;
     }

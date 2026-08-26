@@ -314,9 +314,9 @@ fn main() -> vidoc::error::Result<()> {
             // Reconstruct RGB from decoded YCbCr
             let rgb_flat: Vec<u8> = vidoc::lossy::reconstruct_pixels(
                 dec_dims,
-                &decoded_blocks.y,
-                &decoded_blocks.cb,
-                &decoded_blocks.cr,
+                &decoded_blocks.as_ref().y,
+                &decoded_blocks.as_ref().cb,
+                &decoded_blocks.as_ref().cr,
                 None,
                 Subsampling::Sample420,
             );

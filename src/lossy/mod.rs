@@ -1,4 +1,4 @@
-use std::ops::AddAssign;
+use std::{ops::AddAssign, sync::Arc};
 
 use num_traits::{Bounded, FromPrimitive, NumCast, Signed, ToPrimitive};
 use rayon::{
@@ -20,12 +20,110 @@ pub mod frame;
 pub mod jpg;
 
 #[derive(Clone)]
-pub struct SubSampleBlockGroup<T> {
-    pub dimensions: BlockDimensions,
-    pub subsampling: Subsampling,
-    pub y: Vec<Block<T>>,
-    pub cb: Vec<Block<T>>,
-    pub cr: Vec<Block<T>>,
+pub struct SubSampleBlockGroup<T>(Arc<SubSampleBlockGroupInner<T>>);
+
+impl<T> SubSampleBlockGroup<T> {
+    pub fn new(
+        dimensions: BlockDimensions,
+        subsampling: Subsampling,
+        y: Vec<Block<T>>,
+        cb: Vec<Block<T>>,
+        cr: Vec<Block<T>>,
+    ) -> Self {
+        Self(Arc::new(SubSampleBlockGroupInner {
+            dimensions,
+            subsampling,
+            y,
+            cb,
+            cr,
+        }))
+    }
+}
+
+impl<T> SubSampleBlockGroup<T> {
+    pub fn dimensions(&self) -> BlockDimensions {
+        self.0.dimensions
+    }
+
+    pub fn subsampling(&self) -> Subsampling {
+        self.0.subsampling
+    }
+
+    pub fn y(&self) -> &[Block<T>] {
+        &self.0.y
+    }
+
+    pub fn cb(&self) -> &[Block<T>] {
+        &self.0.cb
+    }
+
+    pub fn cr(&self) -> &[Block<T>] {
+        &self.0.cr
+    }
+}
+
+impl<T> SubSampleBlockGroup<T> {
+    pub fn as_ref(&self) -> SubSampleBlockGroupRef<'_, T> {
+        SubSampleBlockGroupRef {
+            dimensions: self.0.dimensions,
+            subsampling: self.0.subsampling,
+            y: &self.0.y,
+            cb: &self.0.cb,
+            cr: &self.0.cr,
+        }
+    }
+}
+
+struct SubSampleBlockGroupInner<T> {
+    dimensions: BlockDimensions,
+    subsampling: Subsampling,
+    y: Vec<Block<T>>,
+    cb: Vec<Block<T>>,
+    cr: Vec<Block<T>>,
+}
+
+impl<T> SubSampleBlockGroup<T>
+where
+    T: Signed + Default + AddAssign + Copy + ToPrimitive,
+{
+    /// Calculates the sum of absolute difference on the y-channel.
+    pub(crate) fn sum_of_abs_difference(&self, other: SubSampleBlockGroup<T>) -> i64 {
+        self.as_ref().sum_of_abs_difference(other.as_ref())
+    }
+}
+
+impl<T> SubSampleBlockGroup<T>
+where
+    T: Copy + ToPrimitive + Send + Sync + 'static,
+{
+    pub fn convert_to<U>(self) -> SubSampleBlockGroup<U>
+    where
+        T: Send + Sync,
+        U: Copy + Default + NumCast + Send + Sync + 'static,
+    {
+        SubSampleBlockGroup(Arc::new(SubSampleBlockGroupInner {
+            dimensions: self.0.dimensions,
+            subsampling: self.0.subsampling,
+            y: self
+                .0
+                .y
+                .par_iter()
+                .map(|block| block.convert_to())
+                .collect(),
+            cb: self
+                .0
+                .cb
+                .par_iter()
+                .map(|block| block.convert_to())
+                .collect(),
+            cr: self
+                .0
+                .cr
+                .par_iter()
+                .map(|block| block.convert_to())
+                .collect(),
+        }))
+    }
 }
 
 pub struct SubSampleBlockGroupRef<'a, T> {
@@ -36,7 +134,7 @@ pub struct SubSampleBlockGroupRef<'a, T> {
     pub cr: &'a [Block<T>],
 }
 
-impl<'a, T> SubSampleBlockGroupRef<'a, T>
+impl<T> SubSampleBlockGroupRef<'_, T>
 where
     T: Signed + Default + AddAssign + Copy + ToPrimitive,
 {
@@ -52,37 +150,6 @@ where
         }
 
         sad
-    }
-}
-
-impl<T> SubSampleBlockGroup<T>
-where
-    T: Copy + ToPrimitive + Send + Sync + 'static,
-{
-    pub fn convert_to<U>(self) -> SubSampleBlockGroup<U>
-    where
-        T: Send + Sync,
-        U: Copy + Default + NumCast + Send + Sync + 'static,
-    {
-        SubSampleBlockGroup {
-            dimensions: self.dimensions,
-            subsampling: self.subsampling,
-            y: self.y.par_iter().map(|block| block.convert_to()).collect(),
-            cb: self.cb.par_iter().map(|block| block.convert_to()).collect(),
-            cr: self.cr.par_iter().map(|block| block.convert_to()).collect(),
-        }
-    }
-}
-
-impl<T> SubSampleBlockGroup<T> {
-    pub fn as_ref(&self) -> SubSampleBlockGroupRef<'_, T> {
-        SubSampleBlockGroupRef {
-            dimensions: self.dimensions,
-            subsampling: self.subsampling,
-            y: &self.y,
-            cb: &self.cb,
-            cr: &self.cr,
-        }
     }
 }
 
@@ -152,13 +219,13 @@ pub fn subsample_into_block_ycbcr(
         .map(|&(r, c)| build_block(&cr, r, c, chroma_width))
         .collect();
 
-    SubSampleBlockGroup {
+    SubSampleBlockGroup(Arc::new(SubSampleBlockGroupInner {
         dimensions: dimensions.into(),
         subsampling,
         y: y_blocks,
         cb: cb_blocks,
         cr: cr_blocks,
-    }
+    }))
 }
 
 #[inline]
@@ -330,6 +397,89 @@ fn break_block<T>(
                 let block_idx = block_r * 8 + block_c;
                 chunk[chunk_idx] = clamp(block[block_idx]);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use crate::{
+        block::Block,
+        color::Subsampling,
+        dimensions::BlockDimensions,
+        lossy::{SubSampleBlockGroup, SubSampleBlockGroupRef},
+    };
+
+    #[derive(Debug, Clone)]
+    pub(crate) struct TestSubSampleBlockGroup<T> {
+        pub dimensions: BlockDimensions,
+        pub subsampling: Subsampling,
+        pub y: Vec<Block<T>>,
+        pub cb: Vec<Block<T>>,
+        pub cr: Vec<Block<T>>,
+    }
+
+    impl<T> TestSubSampleBlockGroup<T>
+    where
+        T: Copy + Default,
+    {
+        pub(crate) fn test_frame(width: usize, height: usize, fill: T) -> Self {
+            let block_dims = BlockDimensions { width, height };
+
+            let num_blocks = width * height;
+            let mut blocks = Vec::with_capacity(num_blocks);
+
+            for _ in 0..num_blocks {
+                let mut block = Block::<T>::default();
+                for r in 0..8 {
+                    for c in 0..8 {
+                        block.set(r, c, fill);
+                    }
+                }
+                blocks.push(block);
+            }
+
+            // For 4:2:0, chroma is half resolution in both dimensions
+            let chroma_blocks = (width / 2) * (height / 2);
+            let mut cb_blocks = Vec::with_capacity(chroma_blocks);
+            let mut cr_blocks = Vec::with_capacity(chroma_blocks);
+
+            for _ in 0..chroma_blocks {
+                cb_blocks.push(Block::<T>::default());
+                cr_blocks.push(Block::<T>::default());
+            }
+
+            Self {
+                dimensions: block_dims,
+                subsampling: Subsampling::Sample420,
+                y: blocks,
+                cb: cb_blocks,
+                cr: cr_blocks,
+            }
+        }
+    }
+
+    impl<T> TestSubSampleBlockGroup<T> {
+        pub(crate) fn as_ref(&self) -> SubSampleBlockGroupRef<'_, T> {
+            SubSampleBlockGroupRef {
+                dimensions: self.dimensions,
+                subsampling: self.subsampling,
+                y: &self.y,
+                cb: &self.cb,
+                cr: &self.cr,
+            }
+        }
+    }
+
+    impl<T> From<TestSubSampleBlockGroup<T>> for SubSampleBlockGroup<T> {
+        fn from(value: TestSubSampleBlockGroup<T>) -> Self {
+            SubSampleBlockGroup::new(
+                value.dimensions,
+                value.subsampling,
+                value.y,
+                value.cb,
+                value.cr,
+            )
         }
     }
 }
