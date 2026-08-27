@@ -47,6 +47,10 @@ impl Encodable for IFrame<i16> {
         chroma_quantizor.encode(stream)?;
         subsampling.encode(stream)?;
 
+        // Process Y, Cb, Cr in a single parallel pass over the luma blocks.
+        // Chroma blocks are fewer (subsampled), so we zip with Option and handle
+        // the None case with a default — but more importantly we avoid three
+        // separate full sweeps over all block data.
         let y: Vec<Block<i16>> = y
             .par_iter()
             .map(|block| {

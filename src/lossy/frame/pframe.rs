@@ -2,16 +2,18 @@ use std::io::{Read, Write};
 
 use rayon::prelude::*;
 
-use super::{
-    build_predicted_blocks, calculate_residuals_for_macroblock, compressed_motion_vectors,
-    motion_vector::MotionVector,
-    r#macro::{PMacroBlock, PMacroBlocks, Prediction},
-    reassemble_frame,
-};
 use crate::{
     block::Block,
     dimensions::BlockDimensions,
-    lossy::{frame::motion_vector::depth16, SubSampleBlockGroup, SubSampleBlockGroupRef},
+    lossy::{
+        frame::{
+            build_predicted_blocks, calculate_residuals_for_macroblock, compressed_motion_vectors,
+            motion_vector::depth16,
+            r#macro::{PMacroBlock, PMacroBlocks, Prediction},
+            reassemble_frame, MotionVector,
+        },
+        SubSampleBlockGroup, SubSampleBlockGroupRef,
+    },
     point::Point,
     BitStreamReader, BitStreamWriter, Decodable, Encodable, Result,
 };

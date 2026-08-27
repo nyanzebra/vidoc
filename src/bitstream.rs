@@ -46,6 +46,8 @@ where
         Ok(res)
     }
 
+    /// Stack-allocated variant of `read_slice` for fixed-size reads.
+    /// Avoids the heap allocation that `read_slice` incurs per call.
     pub fn read_array<const N: usize>(&mut self) -> Result<[u8; N]> {
         let mut buf = [0u8; N];
         for b in &mut buf {
@@ -288,6 +290,9 @@ where
         Ok(())
     }
 
+    /// Write a pre-encoded byte slice directly to the underlying writer,
+    /// bypassing the per-byte overhead of repeated `write()` calls.
+    /// The stream must be byte-aligned before calling this.
     pub fn write_all_bytes(&mut self, bytes: &[u8]) -> Result<()> {
         self.align_to_byte()?;
         self.stream.write_all(bytes).map_err(Error::from)

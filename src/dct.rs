@@ -12,10 +12,9 @@ impl Block<f64> {
         // horizontal - process each row
         for r in 0..8 {
             let row_start = r * 8;
-            let mut row = [0.0; 8];
-            row.copy_from_slice(&data[row_start..(8 + row_start)]);
+            let row = data[row_start..row_start + 8].try_into().unwrap();
             let transformed_row = dct1_fast(row);
-            data[row_start..(8 + row_start)].copy_from_slice(&transformed_row);
+            data[row_start..row_start + 8].copy_from_slice(&transformed_row);
         }
 
         // vertical - process each column
@@ -50,10 +49,9 @@ impl Block<f64> {
         // horizontal - process each row
         for r in 0..Block::<f64>::rows() {
             let row_start = r * 8;
-            let mut row = [0.0; 8];
-            row.copy_from_slice(&data[row_start..(8 + row_start)]);
+            let row = data[row_start..row_start + 8].try_into().unwrap();
             let transformed_row = idct1_fast(row);
-            data[row_start..(8 + row_start)].copy_from_slice(&transformed_row);
+            data[row_start..row_start + 8].copy_from_slice(&transformed_row);
         }
 
         // vertical - process each column
@@ -106,23 +104,23 @@ fn dct1_fast(line: [f64; 8]) -> [f64; 8] {
 
 #[inline]
 fn dct1_fast_stage1(line: [f64; 8]) -> [f64; 8] {
-    let c0 = line[0] + line[7];
-    let c1 = line[1] + line[6];
-    let c2 = line[2] + line[5];
-    let c3 = line[3] + line[4];
-    let c4 = -line[4] + line[3];
-    let c5 = -line[5] + line[2];
-    let c6 = -line[6] + line[1];
-    let c7 = -line[7] + line[0];
+    let c0 = f64::algebraic_add(line[0], line[7]);
+    let c1 = f64::algebraic_add(line[1], line[6]);
+    let c2 = f64::algebraic_add(line[2], line[5]);
+    let c3 = f64::algebraic_add(line[3], line[4]);
+    let c4 = f64::algebraic_sub(line[3], line[4]);
+    let c5 = f64::algebraic_sub(line[2], line[5]);
+    let c6 = f64::algebraic_sub(line[1], line[6]);
+    let c7 = f64::algebraic_sub(line[0], line[7]);
     [c0, c1, c2, c3, c4, c5, c6, c7]
 }
 
 #[inline]
 fn dct1_fast_stage2(line: [f64; 8]) -> [f64; 8] {
-    let c0 = line[0] + line[3];
-    let c1 = line[1] + line[2];
-    let c2 = -line[2] + line[1];
-    let c3 = -line[3] + line[0];
+    let c0 = f64::algebraic_add(line[0], line[3]);
+    let c1 = f64::algebraic_add(line[1], line[2]);
+    let c2 = f64::algebraic_sub(line[1], line[2]);
+    let c3 = f64::algebraic_sub(line[0], line[3]);
 
     // c4 and c7 are pairs
     let c4 = twist1(line[4], line[7], LLM_C3_COSINE, LLM_C3_SINE, 1.0);
@@ -135,14 +133,14 @@ fn dct1_fast_stage2(line: [f64; 8]) -> [f64; 8] {
 
 #[inline]
 fn dct1_fast_stage3(line: [f64; 8]) -> [f64; 8] {
-    let c0 = line[0] + line[1];
-    let c1 = -line[1] + line[0];
+    let c0 = f64::algebraic_add(line[0], line[1]);
+    let c1 = f64::algebraic_sub(line[0], line[1]);
     let c2 = twist1(line[2], line[3], LLM_C6_COSINE, LLM_C6_SINE, SQRT_2);
     let c3 = twist2(line[2], line[3], LLM_C6_COSINE, LLM_C6_SINE, SQRT_2);
-    let c4 = line[4] + line[6];
-    let c5 = -line[5] + line[7];
-    let c6 = -line[6] + line[4];
-    let c7 = line[7] + line[5];
+    let c4 = f64::algebraic_add(line[4], line[6]);
+    let c5 = f64::algebraic_sub(line[7], line[5]);
+    let c6 = f64::algebraic_sub(line[4], line[6]);
+    let c7 = f64::algebraic_add(line[7], line[5]);
     [c0, c1, c2, c3, c4, c5, c6, c7]
 }
 
@@ -152,36 +150,43 @@ fn dct1_fast_stage4(line: [f64; 8]) -> [f64; 8] {
     let c1 = line[1];
     let c2 = line[2];
     let c3 = line[3];
-    let c4 = -line[4] + line[7];
-    let c5 = line[5] * SQRT_2;
-    let c6 = line[6] * SQRT_2;
-    let c7 = line[7] + line[4];
+    let c4 = f64::algebraic_sub(line[7], line[4]);
+    let c5 = f64::algebraic_mul(line[5], SQRT_2);
+    let c6 = f64::algebraic_mul(line[6], SQRT_2);
+    let c7 = f64::algebraic_add(line[7], line[4]);
 
     [c0, c1, c2, c3, c4, c5, c6, c7]
 }
 
 #[inline]
 fn dct1_fast_shuffle(line: [f64; 8]) -> [f64; 8] {
+    let inv = f64::algebraic_div(1.0, SQRT_8);
     [
-        line[0] / SQRT_8, // 0
-        line[7] / SQRT_8, // 1
-        line[2] / SQRT_8, // 2
-        line[5] / SQRT_8, // 3
-        line[1] / SQRT_8, // 4
-        line[6] / SQRT_8, // 5
-        line[3] / SQRT_8, // 6
-        line[4] / SQRT_8, // 7
+        f64::algebraic_mul(line[0], inv), // 0
+        f64::algebraic_mul(line[7], inv), // 1
+        f64::algebraic_mul(line[2], inv), // 2
+        f64::algebraic_mul(line[5], inv), // 3
+        f64::algebraic_mul(line[1], inv), // 4
+        f64::algebraic_mul(line[6], inv), // 5
+        f64::algebraic_mul(line[3], inv), // 6
+        f64::algebraic_mul(line[4], inv), // 7
     ]
 }
 
 #[inline]
 fn twist1(x: f64, y: f64, c: f64, s: f64, scale: f64) -> f64 {
-    scale * ((x * c) + (y * s))
+    f64::algebraic_mul(
+        scale,
+        f64::algebraic_add(f64::algebraic_mul(x, c), f64::algebraic_mul(y, s)),
+    )
 }
 
 #[inline]
 fn twist2(x: f64, y: f64, c: f64, s: f64, scale: f64) -> f64 {
-    scale * ((-x * s) + (y * c))
+    f64::algebraic_mul(
+        scale,
+        f64::algebraic_add(f64::algebraic_mul(-x, s), f64::algebraic_mul(y, c)),
+    )
 }
 
 /// This is just the reverse of `dct1_fast`

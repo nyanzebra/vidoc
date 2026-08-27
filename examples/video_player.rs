@@ -416,6 +416,16 @@ fn frame_to_rgb_buffer_inplace(
     });
 }
 
+// Drop-in replacement for y4m_frame_to_subsample in examples/video_player.rs
+//
+// Key changes vs original:
+//  1. LUTs computed once per call (not per pixel) for the limited→full range conversion
+//  2. Direct flat-index writes into block.0[] instead of block.set(r, c, value)
+//  3. Rayon parallel_iter over block rows for both luma and chroma
+//  4. Edge blocks (touching the right/bottom boundary) handled separately, so interior blocks have
+//     zero branches in the hot path
+//  5. Chroma Cb/Cr built in a single pass (was two separate loops)
+
 fn y4m_frame_to_subsample(
     frame: y4m::Frame,
     width: usize,

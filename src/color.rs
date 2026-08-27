@@ -75,9 +75,33 @@ where
 
     let center = (T::max_value().to_f64().expect("f64") + 1.0) / 2f64;
 
-    let y = bt2020::KR * r + bt2020::KG * g + bt2020::KB * b;
-    let cb = center + bt2020::CB_R * r + bt2020::CB_G * g + bt2020::CB_B * b;
-    let cr = center + bt2020::CR_R * r + bt2020::CR_G * g + bt2020::CR_B * b;
+    let y = f64::algebraic_add(
+        f64::algebraic_add(
+            f64::algebraic_mul(bt2020::KR, r),
+            f64::algebraic_mul(bt2020::KG, g),
+        ),
+        f64::algebraic_mul(bt2020::KB, b),
+    );
+    let cb = f64::algebraic_add(
+        center,
+        f64::algebraic_add(
+            f64::algebraic_add(
+                f64::algebraic_mul(bt2020::CB_R, r),
+                f64::algebraic_mul(bt2020::CB_G, g),
+            ),
+            f64::algebraic_mul(bt2020::CB_B, b),
+        ),
+    );
+    let cr = f64::algebraic_add(
+        center,
+        f64::algebraic_add(
+            f64::algebraic_add(
+                f64::algebraic_mul(bt2020::CR_R, r),
+                f64::algebraic_mul(bt2020::CR_G, g),
+            ),
+            f64::algebraic_mul(bt2020::CR_B, b),
+        ),
+    );
 
     Ycbcr { y, cb, cr, a }
 }
@@ -86,21 +110,27 @@ pub fn ycbcr_to_rgba<T>(ycbcr: &Ycbcr) -> Rgba<T>
 where
     T: Bounded + FromPrimitive + ToPrimitive,
 {
-    let Ycbcr { y, cb, cr, a } = ycbcr;
+    let Ycbcr { y, cb, cr, a } = *ycbcr;
     let center = (T::max_value().to_f64().expect("f64") + 1.0) / 2f64;
 
     let cb = cb - center;
     let cr = cr - center;
 
-    let r = y + bt2020::Y_TO_R_CR * cr;
-    let g = y + bt2020::Y_TO_G_CB * cb + bt2020::Y_TO_G_CR * cr;
-    let b = y + bt2020::Y_TO_B_CB * cb;
+    let r = f64::algebraic_add(y, f64::algebraic_mul(bt2020::Y_TO_R_CR, cr));
+    let g = f64::algebraic_add(
+        y,
+        f64::algebraic_add(
+            f64::algebraic_mul(bt2020::Y_TO_G_CB, cb),
+            f64::algebraic_mul(bt2020::Y_TO_G_CR, cr),
+        ),
+    );
+    let b = f64::algebraic_add(y, f64::algebraic_mul(bt2020::Y_TO_B_CB, cb));
 
     Rgba {
         r: clamp(r),
         g: clamp(g),
         b: clamp(b),
-        a: clamp(*a),
+        a: clamp(a),
     }
 }
 
@@ -419,14 +449,16 @@ pub fn subsample_ycbcr(
         Subsampling::Sample420 => {
             let PixelDimensions { width, height } = dimensions;
 
-            // Collect coordinate pairs for parallel processing
-            let coords: Vec<(usize, usize)> = (0..height)
-                .step_by(2)
-                .flat_map(|r| (0..width).step_by(2).map(move |c| (r, c)))
-                .collect();
+            let chroma_w = width.div_ceil(2);
+            let chroma_h = height.div_ceil(2);
 
-            let (sampled_cb, sampled_cr): (Vec<f64>, Vec<f64>) = coords
+            let (sampled_cb, sampled_cr): (Vec<f64>, Vec<f64>) = (0..chroma_h)
                 .into_par_iter()
+                .flat_map(|row| {
+                    (0..chroma_w)
+                        .into_par_iter()
+                        .map(move |col| (row * 2, col * 2))
+                })
                 .map(|(r, c)| {
                     let idx1 = sample_idx((r, c), width).expect("within width");
                     let idx2 = sample_idx((r, c + 1), width).unwrap_or(idx1);
@@ -465,13 +497,11 @@ pub fn subsample_ycbcr(
         Subsampling::Sample411 => {
             let PixelDimensions { width, height } = dimensions;
 
-            // Collect coordinate pairs for parallel processing
-            let coords: Vec<(usize, usize)> = (0..height)
-                .flat_map(|r| (0..width).step_by(4).map(move |c| (r, c)))
-                .collect();
+            let chroma_w = width.div_ceil(4);
 
-            let (sampled_cb, sampled_cr): (Vec<f64>, Vec<f64>) = coords
+            let (sampled_cb, sampled_cr): (Vec<f64>, Vec<f64>) = (0..height)
                 .into_par_iter()
+                .flat_map(|r| (0..chroma_w).into_par_iter().map(move |col| (r, col * 4)))
                 .map(|(r, c)| {
                     let idx1 = sample_idx((r, c), width).expect("within width");
                     let idx2 = sample_idx((r, c + 1), width).unwrap_or(idx1);
@@ -509,13 +539,11 @@ pub fn subsample_ycbcr(
         Subsampling::Sample422 => {
             let PixelDimensions { width, height } = dimensions;
 
-            // Collect coordinate pairs for parallel processing
-            let coords: Vec<(usize, usize)> = (0..height)
-                .flat_map(|r| (0..width).step_by(2).map(move |c| (r, c)))
-                .collect();
+            let chroma_w = width.div_ceil(2);
 
-            let (sampled_cb, sampled_cr): (Vec<f64>, Vec<f64>) = coords
+            let (sampled_cb, sampled_cr): (Vec<f64>, Vec<f64>) = (0..height)
                 .into_par_iter()
+                .flat_map(|r| (0..chroma_w).into_par_iter().map(move |col| (r, col * 2)))
                 .map(|(r, c)| {
                     let idx1 = sample_idx((r, c), width).expect("within width");
                     let idx2 = sample_idx((r, c + 1), width).unwrap_or(idx1);
@@ -541,8 +569,9 @@ pub fn subsample_ycbcr(
         // - full horizontal
         // - full vertical
         Subsampling::Sample444 => {
-            let cb = ycbcr.par_iter().map(|pixel| pixel.cb).collect::<Vec<_>>();
-            let cr = ycbcr.par_iter().map(|pixel| pixel.cr).collect::<Vec<_>>();
+            // Single parallel pass: extract all three channels at once
+            let (cb, cr): (Vec<f64>, Vec<f64>) =
+                ycbcr.par_iter().map(|pixel| (pixel.cb, pixel.cr)).unzip();
 
             SubSampleGroup {
                 dimensions,

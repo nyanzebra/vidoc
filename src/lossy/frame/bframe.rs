@@ -87,6 +87,8 @@ impl BFrame<i16> {
         let motion_vecs = self.motion_vectors();
         let compressed = compressed_motion_vectors(&motion_vecs, &self.dimensions());
 
+        // build_predicted_blocks and calculate_residuals_for_macroblock are pure
+        // functions of their inputs — parallelize across macroblocks.
         compressed
             .into_par_iter()
             .map(|((prediction, _score), location)| {

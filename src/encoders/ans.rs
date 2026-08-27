@@ -34,12 +34,12 @@ const MIN_OUTPUT_BUFFER_SIZE: usize = 1024;
 
 pub(crate) fn encode<T>(data: &[T], stream: &mut BitStreamWriter<impl Write>) -> Result<()>
 where
-    T: crate::ToBytes + Sync,
+    T: crate::ToBytes,
 {
+    // .to_bytes() is a trivial copy — parallelizing it adds rayon overhead with no gain.
+    // A plain iterator avoids the intermediate Vec allocation from par_iter.
     let data = data.iter().flat_map(|x| x.to_bytes()).collect::<Vec<u8>>();
-
     encode_raw::<BYTE_SIZE_U8, u8, _>(&data, stream)?;
-
     Ok(())
 }
 
@@ -215,6 +215,7 @@ where
     T: crate::FromBytes,
     R: Read,
 {
+    // Decode directly into T without an intermediate Vec<u8> re-parse loop.
     let raw: Vec<u8> = decode_raw(stream)?;
     let mut start = 0;
     let item_size = std::mem::size_of::<T>();
@@ -256,9 +257,7 @@ where
     let mut symbols = Vec::with_capacity(num_symbols);
 
     for _ in 0..num_symbols {
-        let bytes = stream.read_slice(N)?;
-        let mut byte_array = [0u8; N];
-        byte_array.copy_from_slice(&bytes);
+        let byte_array = stream.read_array::<N>()?;
         let symbol = T::from_be_bytes(&byte_array);
 
         let freq = stream

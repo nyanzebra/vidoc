@@ -8,13 +8,14 @@ use std::{
 use num_traits::{Bounded, FromBytes, FromPrimitive, NumCast, PrimInt, ToBytes, ToPrimitive};
 use rayon::{iter::ParallelIterator as _, slice::ParallelSlice as _};
 
+use super::SubSampleBlockGroupRef;
 use crate::{
     block::{quantization::Quantizor, Block},
     color::{Subsampling, Ycbcr},
     dimensions::PixelDimensions,
     encoders::ans,
     image::ImageRef,
-    lossy::{reconstruct_pixels, subsample_into_block_ycbcr, SubSampleBlockGroupRef},
+    lossy::{reconstruct_pixels, subsample_into_block_ycbcr},
     BitStreamReader, BitStreamWriter, Decodable, Encodable as _, Result,
 };
 
