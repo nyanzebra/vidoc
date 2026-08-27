@@ -27,11 +27,11 @@ impl Decodable for Point {
     {
         Ok(Self {
             row: stream
-                .read()?
-                .ok_or(Error::FailedToDecode("row".to_owned()))?,
+                .read::<u32>()?
+                .ok_or(Error::FailedToDecode("row".to_owned()))? as usize,
             col: stream
-                .read()?
-                .ok_or(Error::FailedToDecode("col".to_owned()))?,
+                .read::<u32>()?
+                .ok_or(Error::FailedToDecode("col".to_owned()))? as usize,
         })
     }
 }
@@ -41,8 +41,8 @@ impl Encodable for Point {
     where
         W: Write,
     {
-        stream.write(self.row)?;
-        stream.write(self.col)?;
+        stream.write(self.row as u32)?;
+        stream.write(self.col as u32)?;
         Ok(())
     }
 }

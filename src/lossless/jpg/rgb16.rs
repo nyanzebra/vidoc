@@ -59,7 +59,7 @@ where
 {
     dimensions.encode(stream)?;
     stream.write(depth)?;
-    stream.write(stride)?;
+    stream.write(stride as u32)?;
 
     let PixelDimensions { width, height } = dimensions;
     let mut sample_groups = vec![];
@@ -128,8 +128,8 @@ impl Decodable for Jpg<'_, Rgb16> {
             .read()?
             .ok_or(Error::FailedToDecode("depth".to_owned()))?;
         let stride = stream
-            .read()?
-            .ok_or(Error::FailedToDecode("stride".to_owned()))?;
+            .read::<u32>()?
+            .ok_or(Error::FailedToDecode("stride".to_owned()))? as usize;
         let pixels = decompress(dimensions, depth, stride, stream)?;
         Ok(ImageRgb16::new(
             dimensions,
@@ -151,8 +151,8 @@ impl Decodable for Jpg<'_, Rgba16> {
             .read()?
             .ok_or(Error::FailedToDecode("depth".to_owned()))?;
         let stride = stream
-            .read()?
-            .ok_or(Error::FailedToDecode("stride".to_owned()))?;
+            .read::<u32>()?
+            .ok_or(Error::FailedToDecode("stride".to_owned()))? as usize;
         let pixels = decompress(dimensions, depth, stride, stream)?;
         Ok(ImageRgba16::new(
             dimensions,

@@ -91,22 +91,22 @@ where
         let mut cr = Vec::new();
 
         let len = stream
-            .read::<usize>()?
-            .ok_or(Error::FailedToDecode("y len".to_owned()))?;
+            .read::<u32>()?
+            .ok_or(Error::FailedToDecode("y len".to_owned()))? as usize;
         for _ in 0..len {
             y.push(Block::<T>::decode(stream)?);
         }
 
         let len = stream
-            .read::<usize>()?
-            .ok_or(Error::FailedToDecode("cb len".to_owned()))?;
+            .read::<u32>()?
+            .ok_or(Error::FailedToDecode("cb len".to_owned()))? as usize;
         for _ in 0..len {
             cb.push(Block::<T>::decode(stream)?);
         }
 
         let len = stream
-            .read::<usize>()?
-            .ok_or(Error::FailedToDecode("cr len".to_owned()))?;
+            .read::<u32>()?
+            .ok_or(Error::FailedToDecode("cr len".to_owned()))? as usize;
         for _ in 0..len {
             cr.push(Block::<T>::decode(stream)?);
         }
@@ -127,15 +127,15 @@ where
     where
         W: Write,
     {
-        stream.write(self.y.len())?;
+        stream.write(self.y.len() as u32)?;
         for block in self.y.iter() {
             block.encode(stream)?;
         }
-        stream.write(self.cb.len())?;
+        stream.write(self.cb.len() as u32)?;
         for block in self.cb.iter() {
             block.encode(stream)?;
         }
-        stream.write(self.cr.len())?;
+        stream.write(self.cr.len() as u32)?;
         for block in self.cr.iter() {
             block.encode(stream)?;
         }

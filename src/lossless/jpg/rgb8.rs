@@ -59,7 +59,7 @@ where
 {
     dimensions.encode(stream)?;
     stream.write(depth)?;
-    stream.write(stride)?;
+    stream.write(stride as u32)?;
 
     let depth = depth as usize;
     let PixelDimensions { width, height } = dimensions;
@@ -128,8 +128,8 @@ impl Decodable for Jpg<'_, Rgb8> {
             .read()?
             .ok_or(Error::FailedToDecode("depth".to_owned()))?;
         let stride = stream
-            .read()?
-            .ok_or(Error::FailedToDecode("stride".to_owned()))?;
+            .read::<u32>()?
+            .ok_or(Error::FailedToDecode("stride".to_owned()))? as usize;
         let pixels = decompress(dimensions, depth, stride, stream)?;
         Ok(ImageRgb8::new(
             dimensions,
@@ -151,8 +151,8 @@ impl Decodable for Jpg<'_, Rgba8> {
             .read()?
             .ok_or(Error::FailedToDecode("depth".to_owned()))?;
         let stride = stream
-            .read()?
-            .ok_or(Error::FailedToDecode("stride".to_owned()))?;
+            .read::<u32>()?
+            .ok_or(Error::FailedToDecode("stride".to_owned()))? as usize;
         let pixels = decompress(dimensions, depth, stride, stream)?;
         Ok(ImageRgba8::new(
             dimensions,
@@ -283,8 +283,7 @@ mod tests {
                 );
 
                 let inner_vec: Vec<u8> = inner.into();
-                let mut reader =
-                    BitStreamReader::new_with_data(inner_vec.as_slice()).expect("create reader");
+                let mut reader = BitStreamReader::new(std::io::Cursor::new(inner_vec.as_slice()));
 
                 let decoded = Jpg::<'_, Rgb8>::decode(&mut reader).expect("decompress");
 

@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 use num_traits::{Bounded, FromPrimitive, ToPrimitive};
 
 pub mod bitstream;
-mod bitvec;
+// mod bitvec;
 pub mod block;
 pub mod color;
 mod dct;

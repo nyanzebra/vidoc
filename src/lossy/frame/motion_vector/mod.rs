@@ -78,10 +78,10 @@ impl Decodable for MotionVector {
     {
         Ok(Self {
             x: stream
-                .read::<usize>()?
+                .read::<u32>()?
                 .ok_or(Error::FailedToDecode("mv x".to_owned()))? as isize,
             y: stream
-                .read::<usize>()?
+                .read::<u32>()?
                 .ok_or(Error::FailedToDecode("mv y".to_owned()))? as isize,
         })
     }
@@ -92,8 +92,8 @@ impl Encodable for MotionVector {
     where
         W: Write,
     {
-        stream.write(self.x as usize)?;
-        stream.write(self.y as usize)?;
+        stream.write(self.x as u32)?;
+        stream.write(self.y as u32)?;
         Ok(())
     }
 }

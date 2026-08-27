@@ -17,6 +17,7 @@ name = "video_player"
 path = "examples/video_player.rs"
 
 [dependencies]
+bitstream-io = "4.10.0"
 crossbeam-channel = "0.5"
 num-traits = "0.2"
 rayon = "1.12.0"

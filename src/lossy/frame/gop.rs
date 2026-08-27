@@ -74,8 +74,8 @@ impl Encodable for GroupOfPicturesHeader {
             } => {
                 stream.write(0u8)?;
                 stream.write(u8::from(*subsampling))?;
-                stream.write(dimensions.width)?;
-                stream.write(dimensions.height)?;
+                stream.write(dimensions.width as u32)?;
+                stream.write(dimensions.height as u32)?;
                 stream.write(u8::from(*kind))?;
             }
             GroupOfPicturesHeader::End => {
@@ -109,11 +109,13 @@ impl Decodable for GroupOfPicturesHeader {
                 ),
                 dimensions: PixelDimensions {
                     width: stream
-                        .read::<usize>()?
-                        .ok_or(Error::FailedToDecode("width".to_owned()))?,
+                        .read::<u32>()?
+                        .ok_or(Error::FailedToDecode("width".to_owned()))?
+                        as usize,
                     height: stream
-                        .read::<usize>()?
-                        .ok_or(Error::FailedToDecode("height".to_owned()))?,
+                        .read::<u32>()?
+                        .ok_or(Error::FailedToDecode("height".to_owned()))?
+                        as usize,
                 },
                 kind: Kind::from(
                     stream

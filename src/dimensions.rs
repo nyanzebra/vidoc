@@ -35,8 +35,8 @@ impl Encodable for BlockDimensions {
     where
         W: Write,
     {
-        stream.write(self.width)?;
-        stream.write(self.height)?;
+        stream.write(self.width as u32)?;
+        stream.write(self.height as u32)?;
         Ok(())
     }
 }
@@ -49,11 +49,11 @@ impl Decodable for BlockDimensions {
         R: Read,
     {
         let width = stream
-            .read::<usize>()?
-            .ok_or(Error::FailedToDecode("width".to_owned()))?;
+            .read::<u32>()?
+            .ok_or(Error::FailedToDecode("width".to_owned()))? as usize;
         let height = stream
-            .read::<usize>()?
-            .ok_or(Error::FailedToDecode("height".to_owned()))?;
+            .read::<u32>()?
+            .ok_or(Error::FailedToDecode("height".to_owned()))? as usize;
         Ok(Self { width, height })
     }
 }
@@ -126,8 +126,8 @@ impl Encodable for PixelDimensions {
     where
         W: Write,
     {
-        stream.write(self.width)?;
-        stream.write(self.height)?;
+        stream.write(self.width as u32)?;
+        stream.write(self.height as u32)?;
         Ok(())
     }
 }
@@ -140,11 +140,11 @@ impl Decodable for PixelDimensions {
         R: Read,
     {
         let width = stream
-            .read::<usize>()?
-            .ok_or(Error::FailedToDecode("width".to_owned()))?;
+            .read::<u32>()?
+            .ok_or(Error::FailedToDecode("width".to_owned()))? as usize;
         let height = stream
-            .read::<usize>()?
-            .ok_or(Error::FailedToDecode("height".to_owned()))?;
+            .read::<u32>()?
+            .ok_or(Error::FailedToDecode("height".to_owned()))? as usize;
         Ok(Self { width, height })
     }
 }

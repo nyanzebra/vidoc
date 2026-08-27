@@ -33,7 +33,7 @@ where
         W: Write,
     {
         self.location.encode(stream)?;
-        stream.write(self.blocks.len())?;
+        stream.write(self.blocks.len() as u32)?;
         for block in &self.blocks {
             block.encode(stream)?;
         }
@@ -53,8 +53,8 @@ where
     {
         let location = BlockLocation::decode(stream)?;
         let len = stream
-            .read::<usize>()?
-            .ok_or(Error::FailedToDecode("len".to_owned()))?;
+            .read::<u32>()?
+            .ok_or(Error::FailedToDecode("len".to_owned()))? as usize;
         let mut blocks = Vec::with_capacity(len);
         for _ in 0..len {
             blocks.push(Block::decode(stream)?);
