@@ -46,6 +46,14 @@ where
         Ok(res)
     }
 
+    pub fn read_array<const N: usize>(&mut self) -> Result<[u8; N]> {
+        let mut buf = [0u8; N];
+        for b in &mut buf {
+            *b = self.read::<u8>()?.ok_or(Error::UnexpectedEndOfStream)?;
+        }
+        Ok(buf)
+    }
+
     pub fn read<T>(&mut self) -> Result<Option<T>>
     where
         T: PrimInt + FromPrimitive + Unsigned,
@@ -278,6 +286,11 @@ where
         }
 
         Ok(())
+    }
+
+    pub fn write_all_bytes(&mut self, bytes: &[u8]) -> Result<()> {
+        self.align_to_byte()?;
+        self.stream.write_all(bytes).map_err(Error::from)
     }
 
     pub fn flush(&mut self) -> Result<()> {

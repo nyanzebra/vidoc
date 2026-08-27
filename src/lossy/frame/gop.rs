@@ -216,7 +216,7 @@ where
                             self.last_anchor.as_ref().or(self.last_iframe.as_ref());
 
                         if let Some(back) = maybe_backward_ref {
-                            match PFrame::reassemble(&back.as_ref(), &macroblocks) {
+                            match PFrame::reassemble(back.as_ref(), &macroblocks) {
                                 Ok(reconstructed) => {
                                     self.last_anchor = Some(reconstructed.clone());
 
@@ -224,8 +224,8 @@ where
                                     // This ensures B-frames are returned before the P-frame
                                     self.decoded_frames.push_back((Kind::P, reconstructed));
 
-                                    // Return the first buffered frame (which will be a B-frame if there
-                                    // were any)
+                                    // Return the first buffered frame (which will be a B-frame if
+                                    // there were any)
                                     if let Some((kind, data)) = self.decoded_frames.pop_front() {
                                         Some(Ok(DecodedFrame { kind, data }))
                                     } else {
@@ -377,7 +377,7 @@ where
                         .as_ref()
                         .ok_or(Error::InvalidData)?;
 
-                    let frame = PFrame::reassemble(&backward_ref.as_ref(), pmacro_blocks)?;
+                    let frame = PFrame::reassemble(backward_ref.as_ref(), pmacro_blocks)?;
                     all_decoded[idx] = Some(frame);
                 }
                 // Skip B-frames for now
@@ -411,15 +411,15 @@ where
                     idx + (self.ordering.anchor_distance - (idx % self.ordering.anchor_distance));
 
                 let backward_ref = all_decoded[backward_anchor_pos]
-                    .as_ref()
+                    .clone()
                     .ok_or(Error::InvalidData)?;
 
                 // Forward ref is None if it's beyond the GOP
                 let frame = if forward_anchor_pos < gop_len {
-                    if let Some(forward_ref) = all_decoded[forward_anchor_pos].as_ref() {
+                    if let Some(forward_ref) = all_decoded[forward_anchor_pos].clone() {
                         BFrame::reassemble(
-                            Some(&forward_ref.as_ref()),
-                            &backward_ref.as_ref(),
+                            Some(forward_ref.as_ref()),
+                            backward_ref.as_ref(),
                             bmacro_blocks.as_slice(),
                         )?
                     } else {
@@ -428,7 +428,7 @@ where
                     }
                 } else {
                     // No forward anchor - pass None
-                    BFrame::reassemble(None, &backward_ref.as_ref(), bmacro_blocks.as_slice())?
+                    BFrame::reassemble(None, backward_ref.as_ref(), bmacro_blocks.as_slice())?
                 };
 
                 Ok((*idx, frame))
@@ -572,7 +572,7 @@ where
                         break;
                     }
 
-                    if self.detect_scene_change(&frames[0], &frame) {
+                    if self.detect_scene_change(frames[0].clone(), frame.clone()) {
                         self.buffered_frame = Some(frame);
                         break;
                     }
@@ -629,15 +629,15 @@ where
 
                 // Encode frame header
                 GroupOfPicturesHeader::Frame {
-                    subsampling: frame.subsampling,
-                    dimensions: frame.dimensions.into(),
+                    subsampling: frame.subsampling(),
+                    dimensions: frame.dimensions().into(),
                     kind,
                 }
                 .encode(&mut temp_writer)?;
 
                 match kind {
                     Kind::I => {
-                        let iframe = IFrame::new(frame.as_ref());
+                        let iframe = IFrame::new(frame.clone());
                         iframe.encode(&mut temp_writer)?;
                         temp_writer.align_to_byte()?;
                         temp_writer.flush()?;
@@ -650,21 +650,7 @@ where
                         let reconstructed_f64 = <IFrame<i16> as Decodable>::decode(&mut reader)?;
 
                         // Convert from f64 to i16
-                        let reconstructed = SubSampleBlockGroup {
-                            y: reconstructed_f64.y.iter().map(|b| b.convert_to()).collect(),
-                            cb: reconstructed_f64
-                                .cb
-                                .iter()
-                                .map(|b| b.convert_to())
-                                .collect(),
-                            cr: reconstructed_f64
-                                .cr
-                                .iter()
-                                .map(|b| b.convert_to())
-                                .collect(),
-                            dimensions: reconstructed_f64.dimensions,
-                            subsampling: reconstructed_f64.subsampling,
-                        };
+                        let reconstructed = reconstructed_f64.convert_to::<i16>();
 
                         self.last_iframe = Some(reconstructed.clone());
                         reconstructed_anchors.push(reconstructed);
@@ -681,7 +667,7 @@ where
                         let anchor_idx = backward_local_idx / self.ordering.anchor_distance;
                         let backward_ref = &reconstructed_anchors[anchor_idx];
 
-                        let pframe = PFrame::new(frame.as_ref(), backward_ref.as_ref());
+                        let pframe = PFrame::new(frame.clone(), backward_ref.clone());
                         let macroblocks = pframe.get_macroblocks();
 
                         pframe.encode(&mut temp_writer)?;
@@ -690,7 +676,7 @@ where
 
                         // Reconstruct P-frame to match decoder
                         let reconstructed =
-                            PFrame::reassemble(&backward_ref.as_ref(), &macroblocks)?;
+                            PFrame::reassemble(backward_ref.as_ref(), &macroblocks)?;
 
                         reconstructed_anchors.push(reconstructed);
                     }
@@ -723,8 +709,8 @@ where
                 let mut temp_writer = BitStreamWriter::new(std::io::Cursor::new(&mut frame_data));
 
                 let header_result = GroupOfPicturesHeader::Frame {
-                    subsampling: frame.subsampling,
-                    dimensions: frame.dimensions.into(),
+                    subsampling: frame.subsampling(),
+                    dimensions: frame.dimensions().into(),
                     kind,
                 }
                 .encode(&mut temp_writer);
@@ -757,7 +743,7 @@ where
                 let forward_ref = if forward_local_idx < frames.len() {
                     let forward_anchor_idx = forward_local_idx / self.ordering.anchor_distance;
                     if forward_anchor_idx < reconstructed_anchors.len() {
-                        Some(&reconstructed_anchors[forward_anchor_idx])
+                        Some(reconstructed_anchors[forward_anchor_idx].clone())
                     } else {
                         // Forward anchor doesn't exist yet
                         None
@@ -767,11 +753,7 @@ where
                     None
                 };
 
-                let bframe = BFrame::new(
-                    frame.as_ref(),
-                    forward_ref.map(|f| f.as_ref()),
-                    backward_ref.as_ref(),
-                );
+                let bframe = BFrame::new(frame.clone(), forward_ref.clone(), backward_ref.clone());
 
                 let encode_result = bframe.encode(&mut temp_writer);
                 if let Err(e) = encode_result {
@@ -797,10 +779,7 @@ where
         // Pass 3: Write all frames in display order
         encoded_frames.sort_by_key(|(idx, _, _)| *idx);
         for (_idx, _kind, data) in encoded_frames {
-            // Write raw bytes directly to the sink
-            for byte in data {
-                stream.write(byte)?;
-            }
+            stream.write_all_bytes(&data)?;
         }
 
         Ok(())
@@ -808,15 +787,15 @@ where
 
     fn detect_scene_change(
         &self,
-        reference: &SubSampleBlockGroup<i16>,
-        current: &SubSampleBlockGroup<i16>,
+        reference: SubSampleBlockGroup<i16>,
+        current: SubSampleBlockGroup<i16>,
     ) -> bool {
-        if reference.dimensions != current.dimensions {
+        if reference.dimensions() != current.dimensions() {
             return true;
         }
 
-        let sad = reference.as_ref().sum_of_abs_difference(current.as_ref());
-        let total_pixels = (reference.dimensions.width * reference.dimensions.height) as i64;
+        let sad = reference.sum_of_abs_difference(current);
+        let total_pixels = (reference.dimensions().width * reference.dimensions().height) as i64;
         let avg_diff = sad / total_pixels;
 
         // This seems to be a reasonable threshold for scene change based on
@@ -870,15 +849,15 @@ where
 
     fn detect_scene_change(
         &self,
-        reference: &SubSampleBlockGroup<i16>,
-        current: &SubSampleBlockGroup<i16>,
+        reference: SubSampleBlockGroup<i16>,
+        current: SubSampleBlockGroup<i16>,
     ) -> bool {
-        if reference.dimensions != current.dimensions {
+        if reference.dimensions() != current.dimensions() {
             return true;
         }
 
-        let sad = reference.as_ref().sum_of_abs_difference(current.as_ref());
-        let total_pixels = (reference.dimensions.width * reference.dimensions.height) as i64;
+        let sad = reference.sum_of_abs_difference(current);
+        let total_pixels = (reference.dimensions().width * reference.dimensions().height) as i64;
         let avg_diff = sad / total_pixels;
 
         // This seems to be a reasonable threshold for scene change based on
@@ -903,7 +882,7 @@ where
         while let Some(frame) = self.content.read_frame()? {
             // Check for scene change
             if let Some(ref prev_frame) = last_frame_for_scene_detect {
-                if self.detect_scene_change(prev_frame, &frame) {
+                if self.detect_scene_change(prev_frame.clone(), frame.clone()) {
                     frame_position = 0;
                 }
             }
@@ -916,8 +895,8 @@ where
 
             // Encode the frame header
             GroupOfPicturesHeader::Frame {
-                subsampling: frame.subsampling,
-                dimensions: frame.dimensions.into(),
+                subsampling: frame.subsampling(),
+                dimensions: frame.dimensions().into(),
                 kind,
             }
             .encode(stream)?;
@@ -926,7 +905,7 @@ where
             match kind {
                 Kind::I => {
                     // I-frame: fully encode
-                    IFrame::new(frame.as_ref()).encode(stream)?;
+                    IFrame::new(frame.clone()).encode(stream)?;
                     stream.align_to_byte()?;
                     last_iframe = Some(frame.clone());
                     last_anchor = Some(frame.clone());
@@ -939,13 +918,13 @@ where
                         .or(last_iframe.as_ref())
                         .ok_or(Error::InvalidData)?;
 
-                    let pframe = PFrame::new(frame.as_ref(), reference.as_ref());
+                    let pframe = PFrame::new(frame, reference.clone());
                     let macroblocks = pframe.get_macroblocks();
                     pframe.encode(stream)?;
                     stream.align_to_byte()?;
 
                     // Reconstruct P-frame to match decoder
-                    let reconstructed = PFrame::reassemble(&reference.as_ref(), &macroblocks)?;
+                    let reconstructed = PFrame::reassemble(reference.as_ref(), &macroblocks)?;
                     last_anchor = Some(reconstructed.clone());
                     last_frame_for_scene_detect = Some(reconstructed);
                 }
@@ -1012,13 +991,13 @@ mod tests {
             }
         }
 
-        SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: vec![block; width * height],
-            cb: vec![Block::<i16>::default(); width * height / 4],
-            cr: vec![Block::<i16>::default(); width * height / 4],
-        }
+        SubSampleBlockGroup::new(
+            BlockDimensions { width, height },
+            Subsampling::Sample420,
+            vec![block; width * height],
+            vec![Block::<i16>::default(); width * height / 4],
+            vec![Block::<i16>::default(); width * height / 4],
+        )
     }
 
     // Helper to create a frame with gradient pattern
@@ -1045,30 +1024,30 @@ mod tests {
             }
         }
 
-        SubSampleBlockGroup {
-            dimensions: BlockDimensions { width, height },
-            subsampling: Subsampling::Sample420,
-            y: y_blocks,
-            cb: vec![Block::<i16>::default(); width * height / 4],
-            cr: vec![Block::<i16>::default(); width * height / 4],
-        }
+        SubSampleBlockGroup::new(
+            BlockDimensions { width, height },
+            Subsampling::Sample420,
+            y_blocks,
+            vec![Block::<i16>::default(); width * height / 4],
+            vec![Block::<i16>::default(); width * height / 4],
+        )
     }
 
     // Helper to calculate MSE (Mean Squared Error) between two frames
     fn calculate_mse(
-        original: &SubSampleBlockGroup<i16>,
-        reconstructed: &SubSampleBlockGroup<i16>,
+        original: SubSampleBlockGroup<i16>,
+        reconstructed: SubSampleBlockGroup<i16>,
     ) -> f64 {
         assert_eq!(
-            original.y.len(),
-            reconstructed.y.len(),
+            original.y().len(),
+            reconstructed.y().len(),
             "Frame sizes must match"
         );
 
         let mut total_squared_error = 0i64;
         let mut pixel_count = 0i64;
 
-        for (orig_block, recon_block) in original.y.iter().zip(reconstructed.y.iter()) {
+        for (orig_block, recon_block) in original.y().iter().zip(reconstructed.y().iter()) {
             for r in 0..8 {
                 for c in 0..8 {
                     let orig_val = orig_block.get(r, c) as i64;
@@ -1172,11 +1151,11 @@ mod tests {
         let mut b_frame_mses = Vec::new();
 
         for (idx, (original, decoded)) in original_frames
-            .iter()
+            .into_iter()
             .zip(decoded_frames.iter())
             .enumerate()
         {
-            let mse = calculate_mse(original, &decoded.data);
+            let mse = calculate_mse(original, decoded.data.clone());
             let psnr = calculate_psnr(mse, 255.0);
 
             match decoded.kind {
@@ -1374,11 +1353,11 @@ mod tests {
         // For identical frames, all residuals should be near-zero
         // and quality should be extremely high
         for (idx, (original, decoded)) in original_frames
-            .iter()
-            .zip(decoded_frames.iter())
+            .into_iter()
+            .zip(decoded_frames.into_iter())
             .enumerate()
         {
-            let mse = calculate_mse(original, &decoded.data);
+            let mse = calculate_mse(original, decoded.data);
             let psnr = calculate_psnr(mse, 255.0);
 
             println!(

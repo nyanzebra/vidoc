@@ -16,21 +16,18 @@ use crate::{
     BitStreamReader, BitStreamWriter, Decodable, Encodable, Result,
 };
 
-pub struct PFrame<'a, T> {
-    current: SubSampleBlockGroupRef<'a, T>,
-    previous: SubSampleBlockGroupRef<'a, T>,
+pub struct PFrame<T> {
+    current: SubSampleBlockGroup<T>,
+    previous: SubSampleBlockGroup<T>,
 }
 
-impl<'a, T> PFrame<'a, T> {
-    pub(crate) fn new(
-        current: SubSampleBlockGroupRef<'a, T>,
-        previous: SubSampleBlockGroupRef<'a, T>,
-    ) -> Self {
+impl<T> PFrame<T> {
+    pub(crate) fn new(current: SubSampleBlockGroup<T>, previous: SubSampleBlockGroup<T>) -> Self {
         PFrame { current, previous }
     }
 }
 
-impl Encodable for PFrame<'_, i16> {
+impl Encodable for PFrame<i16> {
     fn encode<W>(&self, stream: &mut BitStreamWriter<W>) -> Result<()>
     where
         W: Write,
@@ -42,51 +39,50 @@ impl Encodable for PFrame<'_, i16> {
     }
 }
 
-impl PFrame<'_, i16> {
+impl PFrame<i16> {
     pub(crate) fn reassemble(
-        previous_frame: &SubSampleBlockGroupRef<'_, i16>,
+        previous_frame: SubSampleBlockGroupRef<'_, i16>,
         macro_blocks: &[PMacroBlock<i16>],
     ) -> Result<SubSampleBlockGroup<i16>> {
         reassemble_frame(None, previous_frame, macro_blocks)
     }
 
     pub(crate) fn get_macroblocks(&self) -> Vec<PMacroBlock<i16>> {
-        let motion_vecs = self.motion_vectors(&self.current.dimensions, self.previous.y);
-        let compressed = compressed_motion_vectors(&motion_vecs, &self.current.dimensions);
+        let motion_vecs = self.motion_vectors(&self.current.dimensions(), self.previous.y());
+        let compressed = compressed_motion_vectors(&motion_vecs, &self.current.dimensions());
 
-        let mut macroblocks = Vec::new();
-        for ((prediction, _score), location) in compressed {
-            // P-frames always use Backward prediction (mv from previous frame)
-            let mv = match prediction {
-                Prediction::Backward(mv) => mv,
-                _ => unreachable!("P-frames should only have Backward prediction"),
-            };
+        compressed
+            .into_par_iter()
+            .map(|((prediction, _score), location)| {
+                let mv = match prediction {
+                    Prediction::Backward(mv) => mv,
+                    _ => unreachable!("P-frames should only have Backward prediction"),
+                };
 
-            let (predicted_y, predicted_cb, predicted_cr) = build_predicted_blocks(
-                &location,
-                &prediction,
-                &self.current.dimensions,
-                self.current.subsampling,
-                None,
-                &self.previous,
-            );
+                let (predicted_y, predicted_cb, predicted_cr) = build_predicted_blocks(
+                    &location,
+                    &prediction,
+                    &self.current.dimensions(),
+                    self.current.subsampling(),
+                    None,
+                    self.previous.clone(),
+                );
 
-            let residuals = calculate_residuals_for_macroblock(
-                &location,
-                &self.current,
-                &predicted_y,
-                &predicted_cb,
-                &predicted_cr,
-            );
+                let residuals = calculate_residuals_for_macroblock(
+                    &location,
+                    self.current.clone(),
+                    &predicted_y,
+                    &predicted_cb,
+                    &predicted_cr,
+                );
 
-            macroblocks.push(PMacroBlock {
-                location,
-                mv,
-                residuals,
-            });
-        }
-
-        macroblocks
+                PMacroBlock {
+                    location,
+                    mv,
+                    residuals,
+                }
+            })
+            .collect()
     }
 
     fn motion_vectors(
@@ -100,8 +96,8 @@ impl PFrame<'_, i16> {
                 (0..dimensions.width)
                     .map(|col| {
                         let idx = row * dimensions.width + col;
-                        if idx < self.current.y.len() && idx < channel.len() {
-                            let current = &self.current.y[idx];
+                        if idx < self.current.y().len() && idx < channel.len() {
+                            let current = &self.current.y()[idx];
                             let (mv, cost) = depth16::ldsp_blocks(
                                 current,
                                 channel,
@@ -119,7 +115,7 @@ impl PFrame<'_, i16> {
     }
 }
 
-impl Decodable for PFrame<'_, i16> {
+impl Decodable for PFrame<i16> {
     type Output = PMacroBlocks<i16>;
 
     fn decode<R>(stream: &mut BitStreamReader<R>) -> Result<Self::Output>
@@ -130,49 +126,12 @@ impl Decodable for PFrame<'_, i16> {
     }
 }
 
-impl PFrame<'_, i16> {}
+impl PFrame<i16> {}
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{
-        block::Block, color::Subsampling, dimensions::BlockDimensions, lossy::SubSampleBlockGroup,
-    };
-
-    fn create_test_frame(width: usize, height: usize, fill_value: i16) -> SubSampleBlockGroup<i16> {
-        let block_dims = BlockDimensions { width, height };
-
-        let num_blocks = width * height;
-        let mut blocks = Vec::with_capacity(num_blocks);
-
-        for _ in 0..num_blocks {
-            let mut block = Block::<i16>::default();
-            for r in 0..8 {
-                for c in 0..8 {
-                    block.set(r, c, fill_value);
-                }
-            }
-            blocks.push(block);
-        }
-
-        // For 4:2:0, chroma is half resolution in both dimensions
-        let chroma_blocks = (width / 2) * (height / 2);
-        let mut cb_blocks = Vec::with_capacity(chroma_blocks);
-        let mut cr_blocks = Vec::with_capacity(chroma_blocks);
-
-        for _ in 0..chroma_blocks {
-            cb_blocks.push(Block::<i16>::default());
-            cr_blocks.push(Block::<i16>::default());
-        }
-
-        SubSampleBlockGroup {
-            dimensions: block_dims,
-            subsampling: Subsampling::Sample420,
-            y: blocks,
-            cb: cb_blocks,
-            cr: cr_blocks,
-        }
-    }
+    use crate::lossy::tests::TestSubSampleBlockGroup;
 
     #[test]
     fn test_pframe_encode_decode_identical_frames() {
@@ -180,11 +139,13 @@ mod test {
         // motion vectors should be (0,0) and residuals should be near zero
         let width = 8;
         let height = 8;
-        let current = create_test_frame(width, height, 100);
-        let previous = create_test_frame(width, height, 100);
+        let current: SubSampleBlockGroup<i16> =
+            TestSubSampleBlockGroup::test_frame(width, height, 100).into();
+        let previous: SubSampleBlockGroup<i16> =
+            TestSubSampleBlockGroup::test_frame(width, height, 100).into();
 
         // Create P-frame
-        let pframe = PFrame::new(current.as_ref(), previous.as_ref());
+        let pframe = PFrame::new(current.clone(), previous.clone());
 
         // Get macroblocks
         let macroblocks = pframe.get_macroblocks();
@@ -218,20 +179,24 @@ mod test {
         }
 
         // Reassemble and verify
-        let reconstructed = PFrame::reassemble(&previous.as_ref(), &macroblocks)
-            .expect("Reassembly should succeed");
+        let reconstructed =
+            PFrame::reassemble(previous.as_ref(), &macroblocks).expect("Reassembly should succeed");
 
         println!(
             "Reconstructed: {}x{} blocks",
-            reconstructed.dimensions.width, reconstructed.dimensions.height
+            reconstructed.dimensions().width,
+            reconstructed.dimensions().height
         );
 
         // Verify dimensions match
-        assert_eq!(reconstructed.dimensions.width, current.dimensions.width);
-        assert_eq!(reconstructed.dimensions.height, current.dimensions.height);
+        assert_eq!(reconstructed.dimensions().width, current.dimensions().width);
+        assert_eq!(
+            reconstructed.dimensions().height,
+            current.dimensions().height
+        );
 
         // Verify Y blocks are close to original (allowing for quantization error)
-        for (idx, (orig, recon)) in current.y.iter().zip(reconstructed.y.iter()).enumerate() {
+        for (idx, (orig, recon)) in current.y().iter().zip(reconstructed.y().iter()).enumerate() {
             for r in 0..8 {
                 for c in 0..8 {
                     let orig_val = orig.get(r, c);
@@ -257,11 +222,13 @@ mod test {
         // Test: When frames differ, residuals should capture the difference
         let width = 8;
         let height = 8;
-        let current = create_test_frame(width, height, 150);
-        let previous = create_test_frame(width, height, 100);
+        let current: SubSampleBlockGroup<i16> =
+            TestSubSampleBlockGroup::test_frame(width, height, 150).into();
+        let previous: SubSampleBlockGroup<i16> =
+            TestSubSampleBlockGroup::test_frame(width, height, 100).into();
 
         // Create P-frame
-        let pframe = PFrame::new(current.as_ref(), previous.as_ref());
+        let pframe = PFrame::new(current.clone(), previous.clone());
 
         // Get macroblocks
         let macroblocks = pframe.get_macroblocks();
@@ -272,16 +239,16 @@ mod test {
         );
 
         // Reassemble
-        let reconstructed = PFrame::reassemble(&previous.as_ref(), &macroblocks)
-            .expect("Reassembly should succeed");
+        let reconstructed =
+            PFrame::reassemble(previous.as_ref(), &macroblocks).expect("Reassembly should succeed");
 
         // Verify the reconstructed frame is closer to current than to previous
         let mut total_error_to_current = 0i64;
         let mut total_error_to_previous = 0i64;
 
-        for (idx, recon) in reconstructed.y.iter().enumerate() {
-            let curr = &current.y[idx];
-            let prev = &previous.y[idx];
+        for (idx, recon) in reconstructed.y().iter().enumerate() {
+            let curr = &current.y()[idx];
+            let prev = &previous.y()[idx];
 
             for r in 0..8 {
                 for c in 0..8 {
@@ -309,8 +276,8 @@ mod test {
         let height = 4;
 
         // Create a simple test case where we can manually verify
-        let mut current = create_test_frame(width, height, 0);
-        let mut previous = create_test_frame(width, height, 0);
+        let mut current = TestSubSampleBlockGroup::test_frame(width, height, 0);
+        let mut previous = TestSubSampleBlockGroup::test_frame(width, height, 0);
 
         // Set specific values in first block
         for r in 0..8 {
@@ -325,7 +292,7 @@ mod test {
         println!("Previous block[0]: all 50");
         println!("Expected residual: ~50 (after DCT/IDCT)");
 
-        let pframe = PFrame::new(current.as_ref(), previous.as_ref());
+        let pframe = PFrame::new(current.into(), previous.clone().into());
         let macroblocks = pframe.get_macroblocks();
 
         // Check that we have residuals
@@ -341,8 +308,9 @@ mod test {
         );
 
         // Reassemble
-        let reconstructed = PFrame::reassemble(&previous.as_ref(), &macroblocks)
-            .expect("Reassembly should succeed");
+        let reconstructed =
+            PFrame::reassemble(previous.as_ref(), &macroblocks).expect("Reassembly should succeed");
+        let reconstructed = reconstructed.as_ref();
 
         // Check first block is closer to 100 than to 50
         let mut sum = 0i32;
@@ -373,10 +341,12 @@ mod test {
         let width = 8;
         let height = 8;
 
-        let current = create_test_frame(width, height, 100);
-        let previous = create_test_frame(width, height, 50);
+        let current: SubSampleBlockGroup<i16> =
+            TestSubSampleBlockGroup::test_frame(width, height, 100).into();
+        let previous: SubSampleBlockGroup<i16> =
+            TestSubSampleBlockGroup::test_frame(width, height, 50).into();
 
-        let pframe = PFrame::new(current.as_ref(), previous.as_ref());
+        let pframe = PFrame::new(current, previous);
         let macroblocks = pframe.get_macroblocks();
 
         println!("\nTest: Motion vector calculation");

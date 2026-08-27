@@ -1,6 +1,5 @@
-use crate::{block::Block, dimensions::BlockDimensions, point::Point};
-
 use super::{MotionVector, LARGE_DIAMOND, SMALL_DIAMOND};
+use crate::{block::Block, dimensions::BlockDimensions, point::Point};
 
 /// Large Diamond Search Pattern for i32 blocks (integer-only, no sub-pixel)
 #[allow(dead_code)]

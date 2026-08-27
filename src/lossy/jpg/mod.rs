@@ -14,7 +14,7 @@ use crate::{
     dimensions::PixelDimensions,
     encoders::ans,
     image::ImageRef,
-    lossy::{reconstruct_pixels, subsample_into_block_ycbcr, SubSampleBlockGroup},
+    lossy::{reconstruct_pixels, subsample_into_block_ycbcr, SubSampleBlockGroupRef},
     BitStreamReader, BitStreamWriter, Decodable, Encodable as _, Result,
 };
 
@@ -49,13 +49,15 @@ impl<'a, T> Jpg<'a, T> {
         dimensions.encode(stream)?;
         self.subsampling.encode(stream)?;
 
-        let SubSampleBlockGroup {
+        let sub_sample_block_group =
+            subsample_into_block_ycbcr(dimensions, ycbcr, self.subsampling);
+        let SubSampleBlockGroupRef {
             dimensions: _,
             subsampling: _,
             y,
             cb,
             cr,
-        } = subsample_into_block_ycbcr(dimensions, ycbcr, self.subsampling);
+        } = sub_sample_block_group.as_ref();
 
         let lumi_quantizor = Quantizor::<Q>::image_luminance();
         let y_dct = y
