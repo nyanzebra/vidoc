@@ -129,7 +129,7 @@ impl Decodable for GroupOfPicturesHeader {
 
 #[allow(clippy::enum_variant_names)]
 enum DecodedFrameData {
-    IFrame(SubSampleBlockGroup<f64>),
+    IFrame(SubSampleBlockGroup<f32>),
     PFrame(Vec<PMacroBlock<i16>>),
     BFrame(Vec<BMacroBlock<i16>>),
 }
@@ -203,7 +203,7 @@ where
 
                 match (kind, frame_data) {
                     (Kind::I, DecodedFrameData::IFrame(iframe)) => {
-                        let converted = iframe.convert_to::<i16>();
+                        let converted = SubSampleBlockGroup::<i16>::from(iframe);
                         self.last_iframe = Some(converted.clone());
                         self.last_anchor = Some(converted.clone());
 
@@ -300,7 +300,7 @@ where
                         // Decode it for the next GOP but don't include in current GOP
                         let next_iframe_data = self.decode_frame(kind)?;
                         if let DecodedFrameData::IFrame(iframe) = next_iframe_data {
-                            self.last_iframe = Some(iframe.convert_to::<i16>());
+                            self.last_iframe = Some(iframe.into());
                         }
                         break;
                     }
@@ -351,13 +351,11 @@ where
         let gop_len = gop_data.len();
 
         // Decode all frames into a buffer (deque works well for this)
-        use std::collections::VecDeque;
-        let mut all_decoded: VecDeque<Option<SubSampleBlockGroup<i16>>> =
-            VecDeque::with_capacity(gop_len);
+        let mut all_decoded: Vec<Option<SubSampleBlockGroup<i16>>> = Vec::with_capacity(gop_len);
 
         // Initialize with None placeholders
         for _ in 0..gop_len {
-            all_decoded.push_back(None);
+            all_decoded.push(None);
         }
 
         // Store the frame kinds for later
@@ -367,7 +365,7 @@ where
         for (idx, (kind, data)) in gop_data.iter().enumerate() {
             match (kind, data) {
                 (Kind::I, DecodedFrameData::IFrame(iframe)) => {
-                    let frame = iframe.clone().convert_to::<i16>();
+                    let frame = iframe.clone().into();
                     all_decoded[idx] = Some(frame);
                 }
                 (Kind::P, DecodedFrameData::PFrame(pmacro_blocks)) => {
@@ -652,7 +650,7 @@ where
                         let reconstructed_f64 = <IFrame<i16> as Decodable>::decode(&mut reader)?;
 
                         // Convert from f64 to i16
-                        let reconstructed = reconstructed_f64.convert_to::<i16>();
+                        let reconstructed = SubSampleBlockGroup::<i16>::from(reconstructed_f64);
 
                         self.last_iframe = Some(reconstructed.clone());
                         reconstructed_anchors.push(reconstructed);

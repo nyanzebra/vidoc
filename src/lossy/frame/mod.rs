@@ -1,7 +1,6 @@
 use std::{
     cmp::{max, PartialOrd},
     ops::{AddAssign, DivAssign, MulAssign},
-    sync::OnceLock,
 };
 
 use crate::{
@@ -230,13 +229,11 @@ where
     end
 }
 
-fn reconstruct_blocks_from_macroblock<T>(
-    mb: &IMacroBlock<T>,
-    blocks_array: &mut [Block<f64>],
+fn reconstruct_blocks_from_macroblock(
+    mb: &IMacroBlock<f32>,
+    blocks_array: &mut [Block<f32>],
     grid_width: usize,
-) where
-    T: Copy + ToPrimitive + 'static,
-{
+) {
     if mb.blocks.is_empty() {
         return;
     }
@@ -244,7 +241,7 @@ fn reconstruct_blocks_from_macroblock<T>(
     // First block is always at the start position
     let start_idx = mb.location.start.row * grid_width + mb.location.start.col;
     if start_idx < blocks_array.len() {
-        blocks_array[start_idx] = mb.blocks[0].convert_to();
+        blocks_array[start_idx] = mb.blocks[0];
     }
 
     // Reconstruct additional blocks following expansion patterns
@@ -258,7 +255,7 @@ fn reconstruct_blocks_from_macroblock<T>(
                 let c = mb.location.start.col + c_offset;
                 let idx = r * grid_width + c;
                 if idx < blocks_array.len() {
-                    blocks_array[idx] = mb.blocks[block_idx].convert_to();
+                    blocks_array[idx] = mb.blocks[block_idx];
                 }
                 block_idx += 1;
             }
@@ -273,7 +270,7 @@ fn reconstruct_blocks_from_macroblock<T>(
                 let c = mb.location.start.col + c_offset;
                 let idx = r * grid_width + c;
                 if idx < blocks_array.len() {
-                    blocks_array[idx] = mb.blocks[block_idx].convert_to();
+                    blocks_array[idx] = mb.blocks[block_idx];
                 }
                 block_idx += 1;
             }
@@ -288,7 +285,7 @@ fn reconstruct_blocks_from_macroblock<T>(
                 let c = mb.location.start.col + c_offset;
                 let idx = r * grid_width + c;
                 if idx < blocks_array.len() {
-                    blocks_array[idx] = mb.blocks[block_idx].convert_to();
+                    blocks_array[idx] = mb.blocks[block_idx];
                 }
                 block_idx += 1;
             }
@@ -328,60 +325,44 @@ pub(crate) fn build_predicted_blocks(
         }
     }
 
-    // Build predicted chroma blocks
+    // Build predicted chroma blocks directly from the mapped chroma
+    // rectangle. This avoids walking luma blocks and maintaining a
+    // per-macroblock deduplication table.
     let chroma_dims = dimensions.subsample(subsampling);
+    let chroma_location = location.map_to_chroma(subsampling);
 
-    let luma_blocks = (end.row - start.row + 1) * (end.col - start.col + 1);
-    let mut predicted_cb = Vec::with_capacity(luma_blocks / 4 + 1);
-    let mut predicted_cr = Vec::with_capacity(luma_blocks / 4 + 1);
+    let chroma_count = (chroma_location.end.row - chroma_location.start.row + 1)
+        * (chroma_location.end.col - chroma_location.start.col + 1);
 
-    let chroma_start_r = start.row / 2;
-    let chroma_start_c = start.col / 2;
-    let mut processed_chroma_blocks = [[false; 32]; 32];
+    let mut predicted_cb = Vec::with_capacity(chroma_count);
+    let mut predicted_cr = Vec::with_capacity(chroma_count);
 
-    for r in start.row..=end.row {
-        for c in start.col..=end.col {
-            let chroma_r = match subsampling {
-                Subsampling::Sample420 | Subsampling::Sample411 => r / 2,
-                _ => r,
-            };
-            let chroma_c = match subsampling {
-                Subsampling::Sample420 | Subsampling::Sample422 => c / 2,
-                Subsampling::Sample411 => c / 4,
-                _ => c,
-            };
+    let backward_cb = backward_ref.cb();
+    let backward_cr = backward_ref.cr();
+    let forward_cb = forward_ref.map(|f| f.cb());
+    let forward_cr = forward_ref.map(|f| f.cr());
 
-            let local_r = chroma_r.saturating_sub(chroma_start_r).min(31);
-            let local_c = chroma_c.saturating_sub(chroma_start_c).min(31);
-            if processed_chroma_blocks[local_r][local_c] {
-                continue;
-            }
-            processed_chroma_blocks[local_r][local_c] = true;
-
-            // Use the helper to predict chroma blocks
-            let pred_cb = predicted_chroma_block(
-                (chroma_r, chroma_c),
+    for r in chroma_location.start.row..=chroma_location.end.row {
+        for c in chroma_location.start.col..=chroma_location.end.col {
+            predicted_cb.push(predicted_chroma_block(
+                (r, c),
                 *prediction,
                 chroma_dims,
                 subsampling,
-                backward_ref.cb(),
-                forward_ref.map(|f| f.cb()),
-            );
+                backward_cb,
+                forward_cb,
+            ));
 
-            let pred_cr = predicted_chroma_block(
-                (chroma_r, chroma_c),
+            predicted_cr.push(predicted_chroma_block(
+                (r, c),
                 *prediction,
                 chroma_dims,
                 subsampling,
-                backward_ref.cr(),
-                forward_ref.map(|f| f.cr()),
-            );
-
-            predicted_cb.push(pred_cb);
-            predicted_cr.push(pred_cr);
+                backward_cr,
+                forward_cr,
+            ));
         }
     }
-
     (predicted_y, predicted_cb, predicted_cr)
 }
 
@@ -398,10 +379,8 @@ pub(crate) fn calculate_residuals_for_macroblock(
 ) -> Residuals<i16> {
     let BlockLocation { start, end } = location;
 
-    static Q_Y: OnceLock<Quantizor<f64>> = OnceLock::new();
-    static Q_C: OnceLock<Quantizor<f64>> = OnceLock::new();
-    let quantizor_y = Q_Y.get_or_init(Quantizor::<f64>::video_luminance);
-    let quantizor_chroma = Q_C.get_or_init(Quantizor::<f64>::video_chrominance);
+    let quantizor_y = Quantizor::<i16>::video_luminance();
+    let quantizor_chroma = Quantizor::<i16>::video_chrominance();
 
     let luma_count = (end.row - start.row + 1) * (end.col - start.col + 1);
     let mut y_residuals = Vec::with_capacity(luma_count);
@@ -414,78 +393,63 @@ pub(crate) fn calculate_residuals_for_macroblock(
 
             let residual_spatial = if idx < current.y().len() && pred_idx < predicted_y.len() {
                 // Use Block subtraction: current - predicted
-                (current.y()[idx] - predicted_y[pred_idx]).convert_to()
+                current.y()[idx] - predicted_y[pred_idx]
             } else {
-                Block::<f64>::default()
+                Block::<i16>::default()
             };
 
             // Apply DCT and quantization
             let residual_dct = residual_spatial.dct();
             let residual_quantized = quantizor_y.quantize(residual_dct);
-            let residual_i16: Block<i16> = residual_quantized.convert_to();
+            let residual_i16: Block<i16> = residual_quantized;
             y_residuals.push(residual_i16);
             pred_idx += 1;
         }
     }
 
-    // Calculate chroma residuals
+    // Calculate chroma residuals.
+    //
+    // A macroblock's luma rectangle maps directly to a chroma rectangle,
+    // so iterate the chroma rectangle once instead of walking every luma
+    // block and maintaining a frame-sized "already processed" table.
     let chroma_dims = current.dimensions().subsample(current.subsampling());
     let chroma_width = chroma_dims.width;
-    let chroma_height = chroma_dims.height;
 
-    let mut cb_residuals = Vec::new();
-    let mut cr_residuals = Vec::new();
+    let chroma_location = location.map_to_chroma(current.subsampling());
 
-    // Track which chroma blocks we've already processed to avoid duplicates
-    // Use a 2D bool array that maps to the chroma space
-    let mut processed_chroma_blocks = vec![vec![false; chroma_width]; chroma_height];
+    let chroma_count = (chroma_location.end.row - chroma_location.start.row + 1)
+        * (chroma_location.end.col - chroma_location.start.col + 1);
+
+    let mut cb_residuals = Vec::with_capacity(chroma_count);
+    let mut cr_residuals = Vec::with_capacity(chroma_count);
+
     let mut pred_chroma_idx = 0;
 
-    for r in start.row..=end.row {
-        for c in start.col..=end.col {
-            // Map luma position to chroma position
-            let chroma_r = match current.subsampling() {
-                Subsampling::Sample420 | Subsampling::Sample411 => r / 2,
-                _ => r,
-            };
-            let chroma_c = match current.subsampling() {
-                Subsampling::Sample420 | Subsampling::Sample422 => c / 2,
-                Subsampling::Sample411 => c / 4,
-                _ => c,
-            };
+    for r in chroma_location.start.row..=chroma_location.end.row {
+        for c in chroma_location.start.col..=chroma_location.end.col {
+            let chroma_idx = r * chroma_width + c;
 
-            // Skip if we've already processed this chroma block
-            if chroma_r >= chroma_height || chroma_c >= chroma_width {
-                continue;
-            }
-            if processed_chroma_blocks[chroma_r][chroma_c] {
-                continue;
-            }
-            processed_chroma_blocks[chroma_r][chroma_c] = true;
-
-            let chroma_idx = chroma_r * chroma_width + chroma_c;
-
-            // Calculate Cb residual using Block subtraction
             let cb_residual_spatial =
                 if chroma_idx < current.cb().len() && pred_chroma_idx < predicted_cb.len() {
-                    (current.cb()[chroma_idx] - predicted_cb[pred_chroma_idx]).convert_to()
+                    current.cb()[chroma_idx] - predicted_cb[pred_chroma_idx]
                 } else {
-                    Block::<f64>::default()
+                    Block::<i16>::default()
                 };
+
             let cb_dct = cb_residual_spatial.dct();
             let cb_quantized = quantizor_chroma.quantize(cb_dct);
-            cb_residuals.push(cb_quantized.convert_to());
+            cb_residuals.push(cb_quantized);
 
-            // Calculate Cr residual using Block subtraction
             let cr_residual_spatial =
                 if chroma_idx < current.cr().len() && pred_chroma_idx < predicted_cr.len() {
-                    (current.cr()[chroma_idx] - predicted_cr[pred_chroma_idx]).convert_to()
+                    current.cr()[chroma_idx] - predicted_cr[pred_chroma_idx]
                 } else {
-                    Block::<f64>::default()
+                    Block::<i16>::default()
                 };
+
             let cr_dct = cr_residual_spatial.dct();
             let cr_quantized = quantizor_chroma.quantize(cr_dct);
-            cr_residuals.push(cr_quantized.convert_to());
+            cr_residuals.push(cr_quantized);
 
             pred_chroma_idx += 1;
         }
@@ -572,11 +536,8 @@ pub(crate) fn reassemble_frame<MB: r#macro::AssemblableMacroBlock>(
     let mut cb_blocks: Vec<Block<i16>> = base_cb.to_vec();
     let mut cr_blocks: Vec<Block<i16>> = base_cr.to_vec();
 
-    // Create quantizors for dequantizing residuals — cached via OnceLock
-    static Q_Y_R: OnceLock<Quantizor<f64>> = OnceLock::new();
-    static Q_C_R: OnceLock<Quantizor<f64>> = OnceLock::new();
-    let quantizor = Q_Y_R.get_or_init(Quantizor::<f64>::video_luminance);
-    let chroma_quantizor = Q_C_R.get_or_init(Quantizor::<f64>::video_chrominance);
+    let quantizor = Quantizor::<i16>::video_luminance();
+    let chroma_quantizor = Quantizor::<i16>::video_chrominance();
 
     for mb in macro_blocks.iter() {
         let BlockLocation { start, end } = mb.location();
@@ -591,17 +552,13 @@ pub(crate) fn reassemble_frame<MB: r#macro::AssemblableMacroBlock>(
                 if y_residual_idx < residuals.y.len() && idx < y_blocks.len() {
                     let residual_quantized = &residuals.y[y_residual_idx];
 
-                    y_blocks[idx] = (predicted_block(
+                    y_blocks[idx] = predicted_block(
                         (row, col),
                         prediction,
                         *dimensions,
                         backward_y,
                         Some(forward_y),
-                    )
-                    .convert_to()
-                        + quantizor.dequantize(residual_quantized.convert_to()).idct())
-                    .clamp(i16::MIN as f64, i16::MAX as f64)
-                    .convert_to();
+                    ) + quantizor.dequantize(*residual_quantized).idct();
                 }
                 y_residual_idx += 1;
             }
@@ -655,18 +612,10 @@ pub(crate) fn reassemble_frame<MB: r#macro::AssemblableMacroBlock>(
                     let cb_residual_quantized = &residuals.cb[chroma_residual_idx];
                     let cr_residual_quantized = &residuals.cr[chroma_residual_idx];
 
-                    predicted_cb = (predicted_cb.convert_to()
-                        + chroma_quantizor
-                            .dequantize(cb_residual_quantized.convert_to())
-                            .idct())
-                    .clamp(i16::MIN as f64, i16::MAX as f64)
-                    .convert_to();
-                    predicted_cr = (predicted_cr.convert_to()
-                        + chroma_quantizor
-                            .dequantize(cr_residual_quantized.convert_to())
-                            .idct())
-                    .clamp(i16::MIN as f64, i16::MAX as f64)
-                    .convert_to();
+                    predicted_cb =
+                        predicted_cb + chroma_quantizor.dequantize(*cb_residual_quantized).idct();
+                    predicted_cr =
+                        predicted_cr + chroma_quantizor.dequantize(*cr_residual_quantized).idct();
 
                     chroma_residual_idx += 1;
                 }

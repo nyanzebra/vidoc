@@ -1,8 +1,11 @@
 use std::{ops::AddAssign, sync::Arc};
 
-use num_traits::{Bounded, FromPrimitive, NumCast, Signed, ToPrimitive};
+use num_traits::{Bounded, FromPrimitive, Signed, ToPrimitive};
 use rayon::{
-    iter::{IndexedParallelIterator as _, IntoParallelRefIterator as _, ParallelIterator as _},
+    iter::{
+        IndexedParallelIterator as _, IntoParallelIterator as _, IntoParallelRefIterator as _,
+        ParallelIterator as _,
+    },
     slice::{ParallelSlice as _, ParallelSliceMut as _},
 };
 
@@ -82,6 +85,54 @@ struct SubSampleBlockGroupInner<T> {
     cr: Vec<Block<T>>,
 }
 
+impl From<SubSampleBlockGroupInner<f32>> for SubSampleBlockGroupInner<i16> {
+    fn from(value: SubSampleBlockGroupInner<f32>) -> Self {
+        SubSampleBlockGroupInner {
+            dimensions: value.dimensions,
+            subsampling: value.subsampling,
+            y: value.y.into_par_iter().map(|block| block.into()).collect(),
+            cb: value.cb.into_par_iter().map(|block| block.into()).collect(),
+            cr: value.cr.into_par_iter().map(|block| block.into()).collect(),
+        }
+    }
+}
+
+impl From<SubSampleBlockGroupInner<f32>> for SubSampleBlockGroupInner<i32> {
+    fn from(value: SubSampleBlockGroupInner<f32>) -> Self {
+        SubSampleBlockGroupInner {
+            dimensions: value.dimensions,
+            subsampling: value.subsampling,
+            y: value.y.into_par_iter().map(|block| block.into()).collect(),
+            cb: value.cb.into_par_iter().map(|block| block.into()).collect(),
+            cr: value.cr.into_par_iter().map(|block| block.into()).collect(),
+        }
+    }
+}
+
+impl From<SubSampleBlockGroupInner<i16>> for SubSampleBlockGroupInner<f32> {
+    fn from(value: SubSampleBlockGroupInner<i16>) -> Self {
+        SubSampleBlockGroupInner {
+            dimensions: value.dimensions,
+            subsampling: value.subsampling,
+            y: value.y.into_par_iter().map(|block| block.into()).collect(),
+            cb: value.cb.into_par_iter().map(|block| block.into()).collect(),
+            cr: value.cr.into_par_iter().map(|block| block.into()).collect(),
+        }
+    }
+}
+
+impl From<SubSampleBlockGroupInner<i32>> for SubSampleBlockGroupInner<f32> {
+    fn from(value: SubSampleBlockGroupInner<i32>) -> Self {
+        SubSampleBlockGroupInner {
+            dimensions: value.dimensions,
+            subsampling: value.subsampling,
+            y: value.y.into_par_iter().map(|block| block.into()).collect(),
+            cb: value.cb.into_par_iter().map(|block| block.into()).collect(),
+            cr: value.cr.into_par_iter().map(|block| block.into()).collect(),
+        }
+    }
+}
+
 impl<T> SubSampleBlockGroup<T>
 where
     T: Signed + Default + AddAssign + Copy + ToPrimitive,
@@ -92,35 +143,97 @@ where
     }
 }
 
-impl<T> SubSampleBlockGroup<T>
-where
-    T: Copy + ToPrimitive + Send + Sync + 'static,
-{
-    pub fn convert_to<U>(self) -> SubSampleBlockGroup<U>
-    where
-        T: Send + Sync,
-        U: Copy + Default + NumCast + Send + Sync + 'static,
-    {
+impl From<SubSampleBlockGroup<f32>> for SubSampleBlockGroup<i16> {
+    fn from(value: SubSampleBlockGroup<f32>) -> Self {
         SubSampleBlockGroup(Arc::new(SubSampleBlockGroupInner {
-            dimensions: self.0.dimensions,
-            subsampling: self.0.subsampling,
-            y: self
-                .0
-                .y
-                .par_iter()
-                .map(|block| block.convert_to())
+            dimensions: value.0.dimensions,
+            subsampling: value.0.subsampling,
+            y: value
+                .y()
+                .into_par_iter()
+                .map(|block| (*block).into())
                 .collect(),
-            cb: self
-                .0
-                .cb
-                .par_iter()
-                .map(|block| block.convert_to())
+            cb: value
+                .cb()
+                .into_par_iter()
+                .map(|block| (*block).into())
                 .collect(),
-            cr: self
-                .0
-                .cr
-                .par_iter()
-                .map(|block| block.convert_to())
+            cr: value
+                .cr()
+                .into_par_iter()
+                .map(|block| (*block).into())
+                .collect(),
+        }))
+    }
+}
+
+impl From<SubSampleBlockGroup<f32>> for SubSampleBlockGroup<i32> {
+    fn from(value: SubSampleBlockGroup<f32>) -> Self {
+        SubSampleBlockGroup(Arc::new(SubSampleBlockGroupInner {
+            dimensions: value.0.dimensions,
+            subsampling: value.0.subsampling,
+            y: value
+                .y()
+                .into_par_iter()
+                .map(|block| (*block).into())
+                .collect(),
+            cb: value
+                .cb()
+                .into_par_iter()
+                .map(|block| (*block).into())
+                .collect(),
+            cr: value
+                .cr()
+                .into_par_iter()
+                .map(|block| (*block).into())
+                .collect(),
+        }))
+    }
+}
+
+impl From<SubSampleBlockGroup<i16>> for SubSampleBlockGroup<f32> {
+    fn from(value: SubSampleBlockGroup<i16>) -> Self {
+        SubSampleBlockGroup(Arc::new(SubSampleBlockGroupInner {
+            dimensions: value.0.dimensions,
+            subsampling: value.0.subsampling,
+            y: value
+                .y()
+                .into_par_iter()
+                .map(|block| (*block).into())
+                .collect(),
+            cb: value
+                .cb()
+                .into_par_iter()
+                .map(|block| (*block).into())
+                .collect(),
+            cr: value
+                .cr()
+                .into_par_iter()
+                .map(|block| (*block).into())
+                .collect(),
+        }))
+    }
+}
+
+impl From<SubSampleBlockGroup<i32>> for SubSampleBlockGroup<f32> {
+    fn from(value: SubSampleBlockGroup<i32>) -> Self {
+        SubSampleBlockGroup(Arc::new(SubSampleBlockGroupInner {
+            dimensions: value.0.dimensions,
+            subsampling: value.0.subsampling,
+            y: value
+                .y()
+                .into_par_iter()
+                .map(|block| (*block).into())
+                .collect(),
+            cb: value
+                .cb()
+                .into_par_iter()
+                .map(|block| (*block).into())
+                .collect(),
+            cr: value
+                .cr()
+                .into_par_iter()
+                .map(|block| (*block).into())
                 .collect(),
         }))
     }
@@ -158,7 +271,7 @@ pub fn subsample_into_block_ycbcr(
     dimensions: PixelDimensions,
     ycbcr: &[Ycbcr],
     subsampling: Subsampling,
-) -> SubSampleBlockGroup<f64> {
+) -> SubSampleBlockGroup<f32> {
     let SubSampleGroup {
         dimensions,
         y,
@@ -176,45 +289,45 @@ pub fn subsample_into_block_ycbcr(
 
     // Create Y blocks using original dimensions (parallel)
     let y_positions: Vec<(usize, usize)> = (0..height)
-        .step_by(Block::<f64>::rows())
+        .step_by(Block::<f32>::rows())
         .flat_map(|r| {
             (0..width)
-                .step_by(Block::<f64>::cols())
+                .step_by(Block::<f32>::cols())
                 .map(move |c| (r, c))
         })
         .collect();
 
-    let y_blocks: Vec<Block<f64>> = y_positions
+    let y_blocks: Vec<Block<f32>> = y_positions
         .par_iter()
         .map(|&(r, c)| build_block(&y, r, c, width))
         .collect();
 
     // Create Cb blocks using chroma pixel dimensions (parallel)
     let cb_positions: Vec<(usize, usize)> = (0..chroma_height)
-        .step_by(Block::<f64>::rows())
+        .step_by(Block::<f32>::rows())
         .flat_map(|r| {
             (0..chroma_width)
-                .step_by(Block::<f64>::cols())
+                .step_by(Block::<f32>::cols())
                 .map(move |c| (r, c))
         })
         .collect();
 
-    let cb_blocks: Vec<Block<f64>> = cb_positions
+    let cb_blocks: Vec<Block<f32>> = cb_positions
         .par_iter()
         .map(|&(r, c)| build_block(&cb, r, c, chroma_width))
         .collect();
 
     // Create Cr blocks using chroma pixel dimensions (parallel)
     let cr_positions: Vec<(usize, usize)> = (0..chroma_height)
-        .step_by(Block::<f64>::rows())
+        .step_by(Block::<f32>::rows())
         .flat_map(|r| {
             (0..chroma_width)
-                .step_by(Block::<f64>::cols())
+                .step_by(Block::<f32>::cols())
                 .map(move |c| (r, c))
         })
         .collect();
 
-    let cr_blocks: Vec<Block<f64>> = cr_positions
+    let cr_blocks: Vec<Block<f32>> = cr_positions
         .par_iter()
         .map(|&(r, c)| build_block(&cr, r, c, chroma_width))
         .collect();
@@ -257,10 +370,10 @@ where
 #[inline]
 pub fn reconstruct_pixels<T>(
     dimensions: PixelDimensions,
-    y_blocks: &[Block<f64>],
-    cb_blocks: &[Block<f64>],
-    cr_blocks: &[Block<f64>],
-    _a_blocks: Option<&[Block<f64>]>,
+    y_blocks: &[Block<f32>],
+    cb_blocks: &[Block<f32>],
+    cr_blocks: &[Block<f32>],
+    _a_blocks: Option<&[Block<f32>]>,
     subsampling: Subsampling,
 ) -> Vec<T>
 where
@@ -375,17 +488,17 @@ where
 #[inline]
 fn break_block<T>(
     chunk: &mut [T],
-    block: &Block<f64>,
+    block: &Block<f32>,
     block_row: usize,
     block_col: usize,
     full_width: usize,
 ) where
     T: Bounded + FromPrimitive + ToPrimitive + Send + Sync,
 {
-    let chunk_start_row = (block_row / Block::<f64>::rows()) * Block::<f64>::rows();
+    let chunk_start_row = (block_row / Block::<f32>::rows()) * Block::<f32>::rows();
 
-    for block_r in 0..Block::<f64>::rows() {
-        for block_c in 0..Block::<f64>::cols() {
+    for block_r in 0..Block::<f32>::rows() {
+        for block_c in 0..Block::<f32>::cols() {
             let pixel_row = block_row + block_r;
             let pixel_col = block_col + block_c;
 

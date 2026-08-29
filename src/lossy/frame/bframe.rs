@@ -750,7 +750,7 @@ mod tests {
 
         // Put a chroma "feature" at position (1, 1) - second chroma block row/col
         // Row 1, Col 1 in 4x4 chroma grid
-        let chroma_idx = 1 * 4 + 1;
+        let chroma_idx = 4 + 1;
         for r in 0..8 {
             for c in 0..8 {
                 forward_ref.cb[chroma_idx].set(r, c, 150);
@@ -840,7 +840,7 @@ mod tests {
         // Set chroma block at position (1, 1) to specific values (this corresponds to luma blocks
         // (2,2)-(3,3))
         // Row 1, Col 1 in chroma (4x4 grid)
-        let chroma_idx_1_1 = 1 * 4 + 1;
+        let chroma_idx_1_1 = 4 + 1;
         for r in 0..8 {
             for c in 0..8 {
                 forward_ref.cb[chroma_idx_1_1].set(r, c, 150);
@@ -1147,7 +1147,7 @@ mod tests {
         // Create current frame with chroma at position 1,1
         let mut current = TestSubSampleBlockGroup::test_frame(width, height, 0);
 
-        let chroma_idx_1_1 = 1 * 4 + 1;
+        let chroma_idx_1_1 = 4 + 1;
         for r in 0..8 {
             for c in 0..8 {
                 current.cb[chroma_idx_1_1].set(r, c, 80);

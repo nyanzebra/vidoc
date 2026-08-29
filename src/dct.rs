@@ -1,298 +1,578 @@
-use std::f64::consts::SQRT_2;
+use wide::f32x4;
 
 use crate::block::Block;
 
 // https://en.wikipedia.org/wiki/Discrete_cosine_transform
-// Allow identity_op and erasing_op for clarity in matrix indexing
-#[allow(clippy::identity_op, clippy::erasing_op)]
-impl Block<f64> {
+
+const SQRT_8: f32 = 2.828_427;
+const LLM_C1_COSINE: f32 = 0.980_785_25;
+const LLM_C1_SINE: f32 = 0.195_090_32;
+const LLM_C3_COSINE: f32 = 0.831_469_6;
+const LLM_C3_SINE: f32 = 0.555_570_24;
+const LLM_C6_COSINE: f32 = 0.382_683_43;
+const LLM_C6_SINE: f32 = 0.923_879_5;
+
+// -----------------------------------------------------------------------------
+// SIMD 2-D DCT / IDCT
+// -----------------------------------------------------------------------------
+//
+// We use f32x4 to process four independent 1-D transforms simultaneously.
+//
+// For example, during the row pass:
+//
+//   x0 = [row0[0], row1[0], row2[0], row3[0]]
+//   x1 = [row0[1], row1[1], row2[1], row3[1]]
+//   ...
+//   x7 = [row0[7], row1[7], row2[7], row3[7]]
+//
+// The SIMD lanes therefore represent four independent DCTs.
+//
+// `wide` provides the appropriate implementation for the target platform,
+// including x86/x86-64, ARM/NEON, and other supported SIMD targets.
+// -----------------------------------------------------------------------------
+
+impl Block<i16> {
+    #[inline]
     pub fn dct(self) -> Self {
-        let mut data = self.0;
-
-        // horizontal - process each row
-        for r in 0..8 {
-            let row_start = r * 8;
-            let row = data[row_start..row_start + 8].try_into().unwrap();
-            let transformed_row = dct1_fast(row);
-            data[row_start..row_start + 8].copy_from_slice(&transformed_row);
-        }
-
-        // vertical - process each column
-        for c in 0..8 {
-            let line = [
-                data[0 * 8 + c],
-                data[1 * 8 + c],
-                data[2 * 8 + c],
-                data[3 * 8 + c],
-                data[4 * 8 + c],
-                data[5 * 8 + c],
-                data[6 * 8 + c],
-                data[7 * 8 + c],
-            ];
-            let col = dct1_fast(line);
-            data[0 * 8 + c] = col[0];
-            data[1 * 8 + c] = col[1];
-            data[2 * 8 + c] = col[2];
-            data[3 * 8 + c] = col[3];
-            data[4 * 8 + c] = col[4];
-            data[5 * 8 + c] = col[5];
-            data[6 * 8 + c] = col[6];
-            data[7 * 8 + c] = col[7];
-        }
-
-        Self(data)
+        Self::from(Block::<f32>::from(self).dct())
     }
 
+    #[inline]
     pub fn idct(self) -> Self {
+        Self::from(Block::<f32>::from(self).idct())
+    }
+}
+
+impl Block<i32> {
+    #[inline]
+    pub fn dct(self) -> Self {
+        Self::from(Block::<f32>::from(self).dct())
+    }
+
+    #[inline]
+    pub fn idct(self) -> Self {
+        Self::from(Block::<f32>::from(self).idct())
+    }
+}
+
+impl Block<f32> {
+    #[inline]
+    fn dct(self) -> Self {
         let mut data = self.0;
 
-        // horizontal - process each row
-        for r in 0..Block::<f64>::rows() {
-            let row_start = r * 8;
-            let row = data[row_start..row_start + 8].try_into().unwrap();
-            let transformed_row = idct1_fast(row);
-            data[row_start..row_start + 8].copy_from_slice(&transformed_row);
+        // Horizontal pass: four rows at a time.
+        for row_group in 0..2 {
+            let r = row_group * 4;
+
+            let input = [
+                f32x4::new([
+                    data[(r) * 8],
+                    data[(r + 1) * 8],
+                    data[(r + 2) * 8],
+                    data[(r + 3) * 8],
+                ]),
+                f32x4::new([
+                    data[(r) * 8 + 1],
+                    data[(r + 1) * 8 + 1],
+                    data[(r + 2) * 8 + 1],
+                    data[(r + 3) * 8 + 1],
+                ]),
+                f32x4::new([
+                    data[(r) * 8 + 2],
+                    data[(r + 1) * 8 + 2],
+                    data[(r + 2) * 8 + 2],
+                    data[(r + 3) * 8 + 2],
+                ]),
+                f32x4::new([
+                    data[(r) * 8 + 3],
+                    data[(r + 1) * 8 + 3],
+                    data[(r + 2) * 8 + 3],
+                    data[(r + 3) * 8 + 3],
+                ]),
+                f32x4::new([
+                    data[(r) * 8 + 4],
+                    data[(r + 1) * 8 + 4],
+                    data[(r + 2) * 8 + 4],
+                    data[(r + 3) * 8 + 4],
+                ]),
+                f32x4::new([
+                    data[(r) * 8 + 5],
+                    data[(r + 1) * 8 + 5],
+                    data[(r + 2) * 8 + 5],
+                    data[(r + 3) * 8 + 5],
+                ]),
+                f32x4::new([
+                    data[(r) * 8 + 6],
+                    data[(r + 1) * 8 + 6],
+                    data[(r + 2) * 8 + 6],
+                    data[(r + 3) * 8 + 6],
+                ]),
+                f32x4::new([
+                    data[(r) * 8 + 7],
+                    data[(r + 1) * 8 + 7],
+                    data[(r + 2) * 8 + 7],
+                    data[(r + 3) * 8 + 7],
+                ]),
+            ];
+
+            let output = dct::dct1_simd(input);
+
+            for i in 0..8 {
+                let values = output[i].to_array();
+
+                data[r * 8 + i] = values[0];
+                data[(r + 1) * 8 + i] = values[1];
+                data[(r + 2) * 8 + i] = values[2];
+                data[(r + 3) * 8 + i] = values[3];
+            }
         }
 
-        // vertical - process each column
-        for c in 0..Block::<f64>::cols() {
-            let line = [
-                data[0 * 8 + c],
-                data[1 * 8 + c],
-                data[2 * 8 + c],
-                data[3 * 8 + c],
-                data[4 * 8 + c],
-                data[5 * 8 + c],
-                data[6 * 8 + c],
-                data[7 * 8 + c],
+        // Vertical pass.
+        //
+        // We process four columns simultaneously. Each vector contains
+        // four independent column values.
+        for column_group in 0..2 {
+            let c = column_group * 4;
+
+            let input = [
+                f32x4::new([data[c], data[c + 1], data[c + 2], data[c + 3]]),
+                f32x4::new([
+                    data[8 + c],
+                    data[8 + c + 1],
+                    data[8 + c + 2],
+                    data[8 + c + 3],
+                ]),
+                f32x4::new([
+                    data[16 + c],
+                    data[16 + c + 1],
+                    data[16 + c + 2],
+                    data[16 + c + 3],
+                ]),
+                f32x4::new([
+                    data[24 + c],
+                    data[24 + c + 1],
+                    data[24 + c + 2],
+                    data[24 + c + 3],
+                ]),
+                f32x4::new([
+                    data[32 + c],
+                    data[32 + c + 1],
+                    data[32 + c + 2],
+                    data[32 + c + 3],
+                ]),
+                f32x4::new([
+                    data[40 + c],
+                    data[40 + c + 1],
+                    data[40 + c + 2],
+                    data[40 + c + 3],
+                ]),
+                f32x4::new([
+                    data[48 + c],
+                    data[48 + c + 1],
+                    data[48 + c + 2],
+                    data[48 + c + 3],
+                ]),
+                f32x4::new([
+                    data[56 + c],
+                    data[56 + c + 1],
+                    data[56 + c + 2],
+                    data[56 + c + 3],
+                ]),
             ];
-            let col = idct1_fast(line);
-            data[0 * 8 + c] = col[0];
-            data[1 * 8 + c] = col[1];
-            data[2 * 8 + c] = col[2];
-            data[3 * 8 + c] = col[3];
-            data[4 * 8 + c] = col[4];
-            data[5 * 8 + c] = col[5];
-            data[6 * 8 + c] = col[6];
-            data[7 * 8 + c] = col[7];
+
+            let output = dct::dct1_simd(input);
+
+            for i in 0..8 {
+                let values = output[i].to_array();
+
+                data[i * 8 + c] = values[0];
+                data[i * 8 + c + 1] = values[1];
+                data[i * 8 + c + 2] = values[2];
+                data[i * 8 + c + 3] = values[3];
+            }
+        }
+
+        Self(data)
+    }
+
+    #[inline]
+    fn idct(self) -> Self {
+        let mut data = self.0;
+
+        // Horizontal pass.
+        for row_group in 0..2 {
+            let r = row_group * 4;
+
+            let input = [
+                f32x4::new([
+                    data[r * 8],
+                    data[(r + 1) * 8],
+                    data[(r + 2) * 8],
+                    data[(r + 3) * 8],
+                ]),
+                f32x4::new([
+                    data[r * 8 + 1],
+                    data[(r + 1) * 8 + 1],
+                    data[(r + 2) * 8 + 1],
+                    data[(r + 3) * 8 + 1],
+                ]),
+                f32x4::new([
+                    data[r * 8 + 2],
+                    data[(r + 1) * 8 + 2],
+                    data[(r + 2) * 8 + 2],
+                    data[(r + 3) * 8 + 2],
+                ]),
+                f32x4::new([
+                    data[r * 8 + 3],
+                    data[(r + 1) * 8 + 3],
+                    data[(r + 2) * 8 + 3],
+                    data[(r + 3) * 8 + 3],
+                ]),
+                f32x4::new([
+                    data[r * 8 + 4],
+                    data[(r + 1) * 8 + 4],
+                    data[(r + 2) * 8 + 4],
+                    data[(r + 3) * 8 + 4],
+                ]),
+                f32x4::new([
+                    data[r * 8 + 5],
+                    data[(r + 1) * 8 + 5],
+                    data[(r + 2) * 8 + 5],
+                    data[(r + 3) * 8 + 5],
+                ]),
+                f32x4::new([
+                    data[r * 8 + 6],
+                    data[(r + 1) * 8 + 6],
+                    data[(r + 2) * 8 + 6],
+                    data[(r + 3) * 8 + 6],
+                ]),
+                f32x4::new([
+                    data[r * 8 + 7],
+                    data[(r + 1) * 8 + 7],
+                    data[(r + 2) * 8 + 7],
+                    data[(r + 3) * 8 + 7],
+                ]),
+            ];
+
+            let output = idct::idct1_simd(input);
+
+            for i in 0..8 {
+                let values = output[i].to_array();
+
+                data[r * 8 + i] = values[0];
+                data[(r + 1) * 8 + i] = values[1];
+                data[(r + 2) * 8 + i] = values[2];
+                data[(r + 3) * 8 + i] = values[3];
+            }
+        }
+
+        // Vertical pass.
+        for column_group in 0..2 {
+            let c = column_group * 4;
+
+            let input = [
+                f32x4::new([data[c], data[c + 1], data[c + 2], data[c + 3]]),
+                f32x4::new([
+                    data[8 + c],
+                    data[8 + c + 1],
+                    data[8 + c + 2],
+                    data[8 + c + 3],
+                ]),
+                f32x4::new([
+                    data[16 + c],
+                    data[16 + c + 1],
+                    data[16 + c + 2],
+                    data[16 + c + 3],
+                ]),
+                f32x4::new([
+                    data[24 + c],
+                    data[24 + c + 1],
+                    data[24 + c + 2],
+                    data[24 + c + 3],
+                ]),
+                f32x4::new([
+                    data[32 + c],
+                    data[32 + c + 1],
+                    data[32 + c + 2],
+                    data[32 + c + 3],
+                ]),
+                f32x4::new([
+                    data[40 + c],
+                    data[40 + c + 1],
+                    data[40 + c + 2],
+                    data[40 + c + 3],
+                ]),
+                f32x4::new([
+                    data[48 + c],
+                    data[48 + c + 1],
+                    data[48 + c + 2],
+                    data[48 + c + 3],
+                ]),
+                f32x4::new([
+                    data[56 + c],
+                    data[56 + c + 1],
+                    data[56 + c + 2],
+                    data[56 + c + 3],
+                ]),
+            ];
+
+            let output = idct::idct1_simd(input);
+
+            for i in 0..8 {
+                let values = output[i].to_array();
+
+                data[i * 8 + c] = values[0];
+                data[i * 8 + c + 1] = values[1];
+                data[i * 8 + c + 2] = values[2];
+                data[i * 8 + c + 3] = values[3];
+            }
         }
 
         Self(data)
     }
 }
 
-// 8.sqrt()
-const SQRT_8: f64 = 2.8284271247461903;
-const LLM_C1_COSINE: f64 = 0.9807852804032304;
-const LLM_C1_SINE: f64 = 0.19509032201612825;
-const LLM_C3_COSINE: f64 = 0.8314696123025452;
-const LLM_C3_SINE: f64 = 0.5555702330196022;
-const LLM_C6_COSINE: f64 = 0.38268343236508984;
-const LLM_C6_SINE: f64 = 0.9238795325112867;
+mod dct {
+    use std::f32::consts::SQRT_2;
 
-/// REF:
-/// https://unix4lyfe.org/dct-1d/
-/// See LLM section
-#[inline]
-fn dct1_fast(line: [f64; 8]) -> [f64; 8] {
-    let s1 = dct1_fast_stage1(line);
-    let s2 = dct1_fast_stage2(s1);
-    let s3 = dct1_fast_stage3(s2);
-    let s4 = dct1_fast_stage4(s3);
-    dct1_fast_shuffle(s4)
+    use wide::f32x4;
+
+    use super::{
+        LLM_C1_COSINE, LLM_C1_SINE, LLM_C3_COSINE, LLM_C3_SINE, LLM_C6_COSINE, LLM_C6_SINE, SQRT_8,
+    };
+
+    #[inline]
+    pub fn dct1_simd(line: [f32x4; 8]) -> [f32x4; 8] {
+        let s1 = dct_stage1(line);
+        let s2 = dct_stage2(s1);
+        let s3 = dct_stage3(s2);
+        let s4 = dct_stage4(s3);
+        dct_shuffle(s4)
+    }
+
+    #[inline]
+    pub fn dct_stage1(line: [f32x4; 8]) -> [f32x4; 8] {
+        let c0 = line[0] + line[7];
+        let c1 = line[1] + line[6];
+        let c2 = line[2] + line[5];
+        let c3 = line[3] + line[4];
+
+        let c4 = line[3] - line[4];
+        let c5 = line[2] - line[5];
+        let c6 = line[1] - line[6];
+        let c7 = line[0] - line[7];
+
+        [c0, c1, c2, c3, c4, c5, c6, c7]
+    }
+
+    #[inline]
+    pub fn dct_stage2(line: [f32x4; 8]) -> [f32x4; 8] {
+        let c0 = line[0] + line[3];
+        let c1 = line[1] + line[2];
+        let c2 = line[1] - line[2];
+        let c3 = line[0] - line[3];
+
+        let c4 = twist1(line[4], line[7], LLM_C3_COSINE, LLM_C3_SINE, 1.0);
+
+        let c7 = twist2(line[4], line[7], LLM_C3_COSINE, LLM_C3_SINE, 1.0);
+
+        let c5 = twist1(line[5], line[6], LLM_C1_COSINE, LLM_C1_SINE, 1.0);
+
+        let c6 = twist2(line[5], line[6], LLM_C1_COSINE, LLM_C1_SINE, 1.0);
+
+        [c0, c1, c2, c3, c4, c5, c6, c7]
+    }
+
+    #[inline]
+    pub fn dct_stage3(line: [f32x4; 8]) -> [f32x4; 8] {
+        let c0 = line[0] + line[1];
+        let c1 = line[0] - line[1];
+
+        let c2 = twist1(line[2], line[3], LLM_C6_COSINE, LLM_C6_SINE, SQRT_2);
+
+        let c3 = twist2(line[2], line[3], LLM_C6_COSINE, LLM_C6_SINE, SQRT_2);
+
+        let c4 = line[4] + line[6];
+        let c5 = line[7] - line[5];
+        let c6 = line[4] - line[6];
+        let c7 = line[7] + line[5];
+
+        [c0, c1, c2, c3, c4, c5, c6, c7]
+    }
+
+    #[inline]
+    pub fn dct_stage4(line: [f32x4; 8]) -> [f32x4; 8] {
+        let c0 = line[0];
+        let c1 = line[1];
+        let c2 = line[2];
+        let c3 = line[3];
+
+        let c4 = line[7] - line[4];
+        let c5 = line[5] * SQRT_2;
+        let c6 = line[6] * SQRT_2;
+        let c7 = line[7] + line[4];
+
+        [c0, c1, c2, c3, c4, c5, c6, c7]
+    }
+
+    #[inline]
+    pub fn dct_shuffle(line: [f32x4; 8]) -> [f32x4; 8] {
+        let inv = f32x4::splat(1.0 / SQRT_8);
+
+        [
+            line[0] * inv,
+            line[7] * inv,
+            line[2] * inv,
+            line[5] * inv,
+            line[1] * inv,
+            line[6] * inv,
+            line[3] * inv,
+            line[4] * inv,
+        ]
+    }
+
+    #[inline]
+    fn twist1(x: f32x4, y: f32x4, c: f32, s: f32, scale: f32) -> f32x4 {
+        f32x4::splat(scale) * (x * f32x4::splat(c) + y * f32x4::splat(s))
+    }
+
+    #[inline]
+    fn twist2(x: f32x4, y: f32x4, c: f32, s: f32, scale: f32) -> f32x4 {
+        f32x4::splat(scale) * (-x * f32x4::splat(s) + y * f32x4::splat(c))
+    }
 }
 
-#[inline]
-fn dct1_fast_stage1(line: [f64; 8]) -> [f64; 8] {
-    let c0 = f64::algebraic_add(line[0], line[7]);
-    let c1 = f64::algebraic_add(line[1], line[6]);
-    let c2 = f64::algebraic_add(line[2], line[5]);
-    let c3 = f64::algebraic_add(line[3], line[4]);
-    let c4 = f64::algebraic_sub(line[3], line[4]);
-    let c5 = f64::algebraic_sub(line[2], line[5]);
-    let c6 = f64::algebraic_sub(line[1], line[6]);
-    let c7 = f64::algebraic_sub(line[0], line[7]);
-    [c0, c1, c2, c3, c4, c5, c6, c7]
-}
+mod idct {
+    use std::f32::consts::SQRT_2;
 
-#[inline]
-fn dct1_fast_stage2(line: [f64; 8]) -> [f64; 8] {
-    let c0 = f64::algebraic_add(line[0], line[3]);
-    let c1 = f64::algebraic_add(line[1], line[2]);
-    let c2 = f64::algebraic_sub(line[1], line[2]);
-    let c3 = f64::algebraic_sub(line[0], line[3]);
+    use wide::f32x4;
 
-    // c4 and c7 are pairs
-    let c4 = twist1(line[4], line[7], LLM_C3_COSINE, LLM_C3_SINE, 1.0);
-    let c7 = twist2(line[4], line[7], LLM_C3_COSINE, LLM_C3_SINE, 1.0);
-    // c5 and c6 are pairs
-    let c5 = twist1(line[5], line[6], LLM_C1_COSINE, LLM_C1_SINE, 1.0);
-    let c6 = twist2(line[5], line[6], LLM_C1_COSINE, LLM_C1_SINE, 1.0);
-    [c0, c1, c2, c3, c4, c5, c6, c7]
-}
+    use super::{
+        LLM_C1_COSINE, LLM_C1_SINE, LLM_C3_COSINE, LLM_C3_SINE, LLM_C6_COSINE, LLM_C6_SINE, SQRT_8,
+    };
 
-#[inline]
-fn dct1_fast_stage3(line: [f64; 8]) -> [f64; 8] {
-    let c0 = f64::algebraic_add(line[0], line[1]);
-    let c1 = f64::algebraic_sub(line[0], line[1]);
-    let c2 = twist1(line[2], line[3], LLM_C6_COSINE, LLM_C6_SINE, SQRT_2);
-    let c3 = twist2(line[2], line[3], LLM_C6_COSINE, LLM_C6_SINE, SQRT_2);
-    let c4 = f64::algebraic_add(line[4], line[6]);
-    let c5 = f64::algebraic_sub(line[7], line[5]);
-    let c6 = f64::algebraic_sub(line[4], line[6]);
-    let c7 = f64::algebraic_add(line[7], line[5]);
-    [c0, c1, c2, c3, c4, c5, c6, c7]
-}
+    #[inline]
+    pub fn idct1_simd(line: [f32x4; 8]) -> [f32x4; 8] {
+        let s0 = idct_unshuffle(line);
+        let s1 = idct_stage1(s0);
+        let s2 = idct_stage2(s1);
+        let s3 = idct_stage3(s2);
+        idct_stage4(s3)
+    }
 
-#[inline]
-fn dct1_fast_stage4(line: [f64; 8]) -> [f64; 8] {
-    let c0 = line[0];
-    let c1 = line[1];
-    let c2 = line[2];
-    let c3 = line[3];
-    let c4 = f64::algebraic_sub(line[7], line[4]);
-    let c5 = f64::algebraic_mul(line[5], SQRT_2);
-    let c6 = f64::algebraic_mul(line[6], SQRT_2);
-    let c7 = f64::algebraic_add(line[7], line[4]);
+    #[inline]
+    pub fn idct_unshuffle(line: [f32x4; 8]) -> [f32x4; 8] {
+        let scale = f32x4::splat(SQRT_8);
 
-    [c0, c1, c2, c3, c4, c5, c6, c7]
-}
+        [
+            line[0] * scale,
+            line[4] * scale,
+            line[2] * scale,
+            line[6] * scale,
+            line[7] * scale,
+            line[3] * scale,
+            line[5] * scale,
+            line[1] * scale,
+        ]
+    }
 
-#[inline]
-fn dct1_fast_shuffle(line: [f64; 8]) -> [f64; 8] {
-    let inv = f64::algebraic_div(1.0, SQRT_8);
-    [
-        f64::algebraic_mul(line[0], inv), // 0
-        f64::algebraic_mul(line[7], inv), // 1
-        f64::algebraic_mul(line[2], inv), // 2
-        f64::algebraic_mul(line[5], inv), // 3
-        f64::algebraic_mul(line[1], inv), // 4
-        f64::algebraic_mul(line[6], inv), // 5
-        f64::algebraic_mul(line[3], inv), // 6
-        f64::algebraic_mul(line[4], inv), // 7
-    ]
-}
+    #[inline]
+    pub fn idct_stage1(line: [f32x4; 8]) -> [f32x4; 8] {
+        let half = f32x4::splat(0.5);
+        let inv_sqrt_2 = f32x4::splat(1.0 / SQRT_2);
 
-#[inline]
-fn twist1(x: f64, y: f64, c: f64, s: f64, scale: f64) -> f64 {
-    f64::algebraic_mul(
-        scale,
-        f64::algebraic_add(f64::algebraic_mul(x, c), f64::algebraic_mul(y, s)),
-    )
-}
+        let c0 = line[0];
+        let c1 = line[1];
+        let c2 = line[2];
+        let c3 = line[3];
 
-#[inline]
-fn twist2(x: f64, y: f64, c: f64, s: f64, scale: f64) -> f64 {
-    f64::algebraic_mul(
-        scale,
-        f64::algebraic_add(f64::algebraic_mul(-x, s), f64::algebraic_mul(y, c)),
-    )
-}
+        let c4 = (line[7] - line[4]) * half;
+        let c5 = line[5] * inv_sqrt_2;
+        let c6 = line[6] * inv_sqrt_2;
+        let c7 = (line[7] + line[4]) * half;
 
-/// This is just the reverse of `dct1_fast`
-fn idct1_fast(line: [f64; 8]) -> [f64; 8] {
-    let s0 = idct1_fast_unshuffle(line);
-    let s1 = idct1_fast_stage1(s0);
-    let s2 = idct1_fast_stage2(s1);
-    let s3 = idct1_fast_stage3(s2);
-    idct1_fast_stage4(s3)
-}
+        [c0, c1, c2, c3, c4, c5, c6, c7]
+    }
 
-#[inline]
-fn idct1_fast_unshuffle(line: [f64; 8]) -> [f64; 8] {
-    [
-        line[0] * SQRT_8,
-        line[4] * SQRT_8,
-        line[2] * SQRT_8,
-        line[6] * SQRT_8,
-        line[7] * SQRT_8,
-        line[3] * SQRT_8,
-        line[5] * SQRT_8,
-        line[1] * SQRT_8,
-    ]
-}
+    #[inline]
+    pub fn idct_stage2(line: [f32x4; 8]) -> [f32x4; 8] {
+        let half = f32x4::splat(0.5);
 
-#[inline]
-fn idct1_fast_stage1(line: [f64; 8]) -> [f64; 8] {
-    let c0 = line[0];
-    let c1 = line[1];
-    let c2 = line[2];
-    let c3 = line[3];
-    let c4 = (line[7] - line[4]) / 2.0;
-    let c5 = line[5] / SQRT_2;
-    let c6 = line[6] / SQRT_2;
-    let c7 = (line[7] + line[4]) / 2.0;
+        let c0 = (line[0] + line[1]) * half;
+        let c1 = (-line[1] + line[0]) * half;
 
-    [c0, c1, c2, c3, c4, c5, c6, c7]
-}
+        let c2 = untwist1(line[2], line[3], LLM_C6_COSINE, LLM_C6_SINE, SQRT_2);
 
-#[inline]
-fn idct1_fast_stage2(line: [f64; 8]) -> [f64; 8] {
-    let c0 = (line[0] + line[1]) / 2.0;
-    let c1 = (-line[1] + line[0]) / 2.0;
-    let c2 = untwist1(line[2], line[3], LLM_C6_COSINE, LLM_C6_SINE, SQRT_2);
-    let c3 = untwist2(line[2], line[3], LLM_C6_COSINE, LLM_C6_SINE, SQRT_2);
-    let c4 = (line[4] + line[6]) / 2.0;
-    let c5 = (line[7] - line[5]) / 2.0;
-    let c6 = (line[4] - line[6]) / 2.0;
-    let c7 = (line[7] + line[5]) / 2.0;
+        let c3 = untwist2(line[2], line[3], LLM_C6_COSINE, LLM_C6_SINE, SQRT_2);
 
-    [c0, c1, c2, c3, c4, c5, c6, c7]
-}
+        let c4 = (line[4] + line[6]) * half;
+        let c5 = (line[7] - line[5]) * half;
+        let c6 = (line[4] - line[6]) * half;
+        let c7 = (line[7] + line[5]) * half;
 
-#[inline]
-fn idct1_fast_stage3(line: [f64; 8]) -> [f64; 8] {
-    let c0 = (line[0] + line[3]) / 2.0;
-    let c1 = (line[1] + line[2]) / 2.0;
-    let c2 = (line[1] - line[2]) / 2.0;
-    let c3 = (line[0] - line[3]) / 2.0;
+        [c0, c1, c2, c3, c4, c5, c6, c7]
+    }
 
-    // c4 and c7 are pairs
-    let c4 = untwist1(line[4], line[7], LLM_C3_COSINE, LLM_C3_SINE, 1.0);
-    let c7 = untwist2(line[4], line[7], LLM_C3_COSINE, LLM_C3_SINE, 1.0);
-    // c5 and c6 are pairs
-    let c5 = untwist1(line[5], line[6], LLM_C1_COSINE, LLM_C1_SINE, 1.0);
-    let c6 = untwist2(line[5], line[6], LLM_C1_COSINE, LLM_C1_SINE, 1.0);
+    #[inline]
+    pub fn idct_stage3(line: [f32x4; 8]) -> [f32x4; 8] {
+        let half = f32x4::splat(0.5);
 
-    [c0, c1, c2, c3, c4, c5, c6, c7]
-}
+        let c0 = (line[0] + line[3]) * half;
+        let c1 = (line[1] + line[2]) * half;
+        let c2 = (line[1] - line[2]) * half;
+        let c3 = (line[0] - line[3]) * half;
 
-#[inline]
-fn idct1_fast_stage4(line: [f64; 8]) -> [f64; 8] {
-    let c0 = (line[0] + line[7]) / 2.0;
-    let c1 = (line[1] + line[6]) / 2.0;
-    let c2 = (line[2] + line[5]) / 2.0;
-    let c3 = (line[3] + line[4]) / 2.0;
-    let c4 = (line[3] - line[4]) / 2.0;
-    let c5 = (line[2] - line[5]) / 2.0;
-    let c6 = (line[1] - line[6]) / 2.0;
-    let c7 = (line[0] - line[7]) / 2.0;
+        let c4 = untwist1(line[4], line[7], LLM_C3_COSINE, LLM_C3_SINE, 1.0);
 
-    [c0, c1, c2, c3, c4, c5, c6, c7]
-}
+        let c7 = untwist2(line[4], line[7], LLM_C3_COSINE, LLM_C3_SINE, 1.0);
 
-#[inline]
-fn untwist1(x: f64, y: f64, c: f64, s: f64, scale: f64) -> f64 {
-    // x and y are the results of a twist 1 or 2
-    // x = (a * c) + (b * s)
-    // y = (-a * s) + (b * c)
-    // ->
-    // x / s = (a * c / s) + b
-    // y / c = (-a * s / c) + b
-    // ->
-    // (x / s) - (y / c) = (a * c / s) + (a * s / c)
-    // ... = a * ((c / s) + (s / c))
-    let x = x / (s * scale);
-    let y = y / (c * scale);
-    (x - y) / ((s / c) + (c / s))
-}
+        let c5 = untwist1(line[5], line[6], LLM_C1_COSINE, LLM_C1_SINE, 1.0);
 
-#[inline]
-fn untwist2(x: f64, y: f64, c: f64, s: f64, scale: f64) -> f64 {
-    // same as `untwist1` but solve for b
-    let x = x / (c * scale);
-    let y = y / (s * scale);
-    (x + y) / ((s / c) + (c / s))
+        let c6 = untwist2(line[5], line[6], LLM_C1_COSINE, LLM_C1_SINE, 1.0);
+
+        [c0, c1, c2, c3, c4, c5, c6, c7]
+    }
+
+    #[inline]
+    pub fn idct_stage4(line: [f32x4; 8]) -> [f32x4; 8] {
+        let half = f32x4::splat(0.5);
+
+        let c0 = (line[0] + line[7]) * half;
+        let c1 = (line[1] + line[6]) * half;
+        let c2 = (line[2] + line[5]) * half;
+        let c3 = (line[3] + line[4]) * half;
+
+        let c4 = (line[3] - line[4]) * half;
+        let c5 = (line[2] - line[5]) * half;
+        let c6 = (line[1] - line[6]) * half;
+        let c7 = (line[0] - line[7]) * half;
+
+        [c0, c1, c2, c3, c4, c5, c6, c7]
+    }
+
+    #[inline]
+    pub fn untwist1(x: f32x4, y: f32x4, c: f32, s: f32, scale: f32) -> f32x4 {
+        let c = f32x4::splat(c);
+        let s = f32x4::splat(s);
+        let scale = f32x4::splat(scale);
+
+        let x = x / (s * scale);
+        let y = y / (c * scale);
+
+        (x - y) / (s / c + c / s)
+    }
+
+    #[inline]
+    pub fn untwist2(x: f32x4, y: f32x4, c: f32, s: f32, scale: f32) -> f32x4 {
+        let c = f32x4::splat(c);
+        let s = f32x4::splat(s);
+        let scale = f32x4::splat(scale);
+
+        let x = x / (c * scale);
+        let y = y / (s * scale);
+
+        (x + y) / (s / c + c / s)
+    }
 }
 
 #[cfg(test)]
@@ -301,90 +581,46 @@ mod tests {
 
     #[test]
     fn block_dct_idct() {
-        let block = Block([
-            52.0, 55.0, 61.0, 66.0, 70.0, 61.0, 64.0, 73.0, 63.0, 59.0, 55.0, 90.0, 109.0, 85.0,
-            69.0, 72.0, 62.0, 59.0, 68.0, 113.0, 144.0, 104.0, 66.0, 73.0, 63.0, 58.0, 71.0, 122.0,
-            154.0, 106.0, 70.0, 69.0, 67.0, 61.0, 68.0, 104.0, 126.0, 88.0, 68.0, 70.0, 79.0, 65.0,
-            60.0, 70.0, 77.0, 68.0, 58.0, 75.0, 85.0, 71.0, 64.0, 59.0, 55.0, 61.0, 65.0, 83.0,
-            87.0, 79.0, 69.0, 68.0, 65.0, 76.0, 78.0, 94.0,
+        let block = Block::<i32>([
+            52, 55, 61, 66, 70, 61, 64, 73, 63, 59, 55, 90, 109, 85, 69, 72, 62, 59, 68, 113, 144,
+            104, 66, 73, 63, 58, 71, 122, 154, 106, 70, 69, 67, 61, 68, 104, 126, 88, 68, 70, 79,
+            65, 60, 70, 77, 68, 58, 75, 85, 71, 64, 59, 55, 61, 65, 83, 87, 79, 69, 68, 65, 76, 78,
+            94,
         ]);
-        println!("{:?}", block.dct().idct());
+
+        let result = block.dct().idct();
+
+        for (actual, expected) in result.0.iter().zip(block.0.iter()) {
+            assert!(
+                (*actual as f32 - *expected as f32).abs() < 0.001,
+                "{actual} != {expected}"
+            );
+        }
     }
 
     #[test]
-    fn dct_idct_is_orig() {
+    pub fn dct_idct_is_orig() {
         let test = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-        assert_f64s_eq(&idct1_fast(dct1_fast(test)), &test);
-    }
 
-    #[test]
-    fn check_dct_idct_is_orig_by_summation() {
-        let test = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-        let s1 = dct1_fast_stage1(test);
-        let s2 = dct1_fast_stage2(s1);
-        let s3 = dct1_fast_stage3(s2);
-        let s4 = dct1_fast_stage4(s3);
-        let is1 = idct1_fast_stage1(s4);
-        let is2 = idct1_fast_stage2(is1);
-        let is3 = idct1_fast_stage3(is2);
-        let is4 = idct1_fast_stage4(is3);
-        assert_f64s_eq(&test, &is4);
-    }
+        let input = [
+            f32x4::splat(test[0]),
+            f32x4::splat(test[1]),
+            f32x4::splat(test[2]),
+            f32x4::splat(test[3]),
+            f32x4::splat(test[4]),
+            f32x4::splat(test[5]),
+            f32x4::splat(test[6]),
+            f32x4::splat(test[7]),
+        ];
 
-    #[test]
-    fn shuffle_unshuffle() {
-        let test = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-        assert_eq!(
-            idct1_fast_unshuffle(dct1_fast_shuffle(test))
-                .iter()
-                .map(|x| x.round())
-                .collect::<Vec<_>>(),
-            test
-        );
-    }
+        let output = idct::idct1_simd(dct::dct1_simd(input));
 
-    #[test]
-    fn twist() {
-        let t1 = twist1(2.0, 4.5, LLM_C3_COSINE, LLM_C3_SINE, 2.0);
-        let t2 = twist2(2.0, 4.5, LLM_C3_COSINE, LLM_C3_SINE, 2.0);
-        let u1 = untwist1(t1, t2, LLM_C3_COSINE, LLM_C3_SINE, 2.0);
-        let u2 = untwist2(t1, t2, LLM_C3_COSINE, LLM_C3_SINE, 2.0);
-        assert_f64_eq(u1, 2.0);
-        assert_f64_eq(u2, 4.5);
-    }
+        for (i, value) in output.iter().enumerate() {
+            let values = value.to_array();
 
-    #[test]
-    fn stage1() {
-        let test = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-        assert_f64s_eq(&idct1_fast_stage1(dct1_fast_stage4(test)), &test);
-    }
-
-    #[test]
-    fn stage2() {
-        let test = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-        assert_f64s_eq(&idct1_fast_stage2(dct1_fast_stage3(test)), &test);
-    }
-
-    #[test]
-    fn stage3() {
-        let test = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-        assert_f64s_eq(&idct1_fast_stage3(dct1_fast_stage2(test)), &test);
-    }
-
-    #[test]
-    fn stage4() {
-        let test = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-        assert_f64s_eq(&idct1_fast_stage4(dct1_fast_stage1(test)), &test);
-    }
-
-    fn assert_f64_eq(x: f64, y: f64) {
-        assert!((x - y).abs() < (f64::EPSILON * 10.0), "{x} != {y}");
-    }
-
-    fn assert_f64s_eq(x: &[f64], y: &[f64]) {
-        assert_eq!(x.len(), y.len(), "{x:?} != {y:?}");
-        for i in 0..x.len() {
-            assert_f64_eq(x[i], y[i]);
+            for actual in values {
+                assert!((actual - test[i]).abs() < 0.001, "{actual} != {}", test[i]);
+            }
         }
     }
 }

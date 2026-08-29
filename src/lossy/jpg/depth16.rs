@@ -1,13 +1,20 @@
 use std::io::{Read, Write};
 
-use super::{decompress_from_stream, Jpg};
+use rayon::{iter::ParallelIterator as _, slice::ParallelSlice as _};
+
+use super::Jpg;
 use crate::{
+    block::{quantization::Quantizor, Block},
+    color::{Subsampling, Ycbcr},
+    dimensions::PixelDimensions,
+    encoders::ans,
     image::Image,
+    lossy::{reconstruct_pixels, subsample_into_block_ycbcr, SubSampleBlockGroupRef},
     pixels::{Rgb16, Rgb16Ref, Rgba16Ref},
     BitStreamReader, BitStreamWriter, Decodable, Encodable, Result,
 };
 
-const SIZE: usize = size_of::<i16>();
+const SIZE: usize = size_of::<i32>();
 
 impl Encodable for Jpg<'_, Rgb16Ref<'_>> {
     fn encode<W>(&self, stream: &mut BitStreamWriter<W>) -> Result<()>
@@ -17,7 +24,7 @@ impl Encodable for Jpg<'_, Rgb16Ref<'_>> {
         let dimensions = self.image.dimensions();
         let ycbcr = self.image.pixels().to_ycbcr();
 
-        self.compress_to_stream::<SIZE, i16, _>(dimensions, &ycbcr, stream)
+        self.compress_to_stream(dimensions, &ycbcr, stream)
     }
 }
 
@@ -29,7 +36,7 @@ impl Encodable for Jpg<'_, Rgba16Ref<'_>> {
         let dimensions = self.image.dimensions();
         let ycbcr = self.image.pixels().to_ycbcr();
 
-        self.compress_to_stream::<SIZE, i16, _>(dimensions, &ycbcr, stream)
+        self.compress_to_stream(dimensions, &ycbcr, stream)
     }
 }
 
@@ -40,11 +47,185 @@ impl Decodable for Jpg<'_, Rgb16> {
     where
         R: Read,
     {
-        let (dimensions, subsampling, pixels) =
-            decompress_from_stream::<SIZE, i16, _, u16>(stream)?;
+        let (dimensions, subsampling, pixels) = decompress_from_stream(stream)?;
 
         Ok(Image::new(dimensions, Rgb16::new(pixels), subsampling))
     }
+}
+
+impl Jpg<'_, Rgb16Ref<'_>> {
+    pub(crate) fn compress_to_stream<W>(
+        &self,
+        dimensions: PixelDimensions,
+        ycbcr: &[Ycbcr],
+        stream: &mut BitStreamWriter<W>,
+    ) -> Result<()>
+    where
+        W: Write,
+    {
+        dimensions.encode(stream)?;
+        self.subsampling.encode(stream)?;
+
+        let sub_sample_block_group =
+            subsample_into_block_ycbcr(dimensions, ycbcr, self.subsampling);
+        let SubSampleBlockGroupRef { y, cb, cr, .. } = sub_sample_block_group.as_ref();
+
+        let lumi_quantizor = Quantizor::<i32>::image_luminance();
+        let chroma_quantizor = Quantizor::<i32>::image_chrominance();
+
+        let y_dct: Vec<i32> = y
+            .iter()
+            .flat_map(|block| {
+                lumi_quantizor
+                    .quantize(Block::<i32>::from(*block).dct())
+                    .zigzag()
+                    .into_iter()
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        let cb_dct: Vec<i32> = cb
+            .iter()
+            .flat_map(|block| {
+                chroma_quantizor
+                    .quantize(Block::<i32>::from(*block).dct())
+                    .zigzag()
+                    .into_iter()
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        let cr_dct: Vec<i32> = cr
+            .iter()
+            .flat_map(|block| {
+                chroma_quantizor
+                    .quantize(Block::<i32>::from(*block).dct())
+                    .zigzag()
+                    .into_iter()
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        ans::encode_raw(&y_dct, stream)?;
+        ans::encode_raw(&cb_dct, stream)?;
+        ans::encode_raw(&cr_dct, stream)?;
+
+        stream.flush()
+    }
+}
+
+impl Jpg<'_, Rgba16Ref<'_>> {
+    pub(crate) fn compress_to_stream<W>(
+        &self,
+        dimensions: PixelDimensions,
+        ycbcr: &[Ycbcr],
+        stream: &mut BitStreamWriter<W>,
+    ) -> Result<()>
+    where
+        W: Write,
+    {
+        dimensions.encode(stream)?;
+        self.subsampling.encode(stream)?;
+
+        let sub_sample_block_group =
+            subsample_into_block_ycbcr(dimensions, ycbcr, self.subsampling);
+        let SubSampleBlockGroupRef { y, cb, cr, .. } = sub_sample_block_group.as_ref();
+
+        let lumi_quantizor = Quantizor::<i32>::image_luminance();
+        let chroma_quantizor = Quantizor::<i32>::image_chrominance();
+
+        let y_dct: Vec<i32> = y
+            .iter()
+            .flat_map(|block| {
+                lumi_quantizor
+                    .quantize(Block::<i32>::from(*block).dct())
+                    .zigzag()
+                    .into_iter()
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        let cb_dct: Vec<i32> = cb
+            .iter()
+            .flat_map(|block| {
+                chroma_quantizor
+                    .quantize(Block::<i32>::from(*block).dct())
+                    .zigzag()
+                    .into_iter()
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        let cr_dct: Vec<i32> = cr
+            .iter()
+            .flat_map(|block| {
+                chroma_quantizor
+                    .quantize(Block::<i32>::from(*block).dct())
+                    .zigzag()
+                    .into_iter()
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        ans::encode_raw(&y_dct, stream)?;
+        ans::encode_raw(&cb_dct, stream)?;
+        ans::encode_raw(&cr_dct, stream)?;
+
+        stream.flush()
+    }
+}
+
+pub(crate) fn decompress_from_stream<R, T>(
+    stream: &mut BitStreamReader<R>,
+) -> Result<(PixelDimensions, Subsampling, Vec<T>)>
+where
+    R: Read,
+    T: num_traits::Bounded + num_traits::FromPrimitive + num_traits::ToPrimitive + Send + Sync,
+{
+    let dimensions = PixelDimensions::decode(stream)?;
+    let subsampling = Subsampling::decode(stream)?;
+
+    let lumi_quantizor = Quantizor::<i32>::image_luminance();
+    let chroma_quantizor = Quantizor::<i32>::image_chrominance();
+
+    let y: Vec<Block<f32>> = ans::decode_raw::<SIZE, i32, _>(stream)?
+        .par_chunks_exact(Block::<i32>::size())
+        .map(|chunk| {
+            Block::<f32>::from(
+                lumi_quantizor
+                    .dequantize(Block::<i32>::from(chunk).zagzig())
+                    .idct(),
+            )
+        })
+        .collect();
+
+    let cb: Vec<Block<f32>> = ans::decode_raw::<SIZE, i32, _>(stream)?
+        .par_chunks_exact(Block::<i32>::size())
+        .map(|chunk| {
+            Block::<f32>::from(
+                chroma_quantizor
+                    .dequantize(Block::<i32>::from(chunk).zagzig())
+                    .idct(),
+            )
+        })
+        .collect();
+
+    let cr: Vec<Block<f32>> = ans::decode_raw::<SIZE, i32, _>(stream)?
+        .par_chunks_exact(Block::<i32>::size())
+        .map(|chunk| {
+            Block::<f32>::from(
+                chroma_quantizor
+                    .dequantize(Block::<i32>::from(chunk).zagzig())
+                    .idct(),
+            )
+        })
+        .collect();
+
+    Ok((
+        dimensions,
+        subsampling,
+        reconstruct_pixels(dimensions, &y, &cb, &cr, None, subsampling),
+    ))
 }
 
 #[cfg(test)]
@@ -106,7 +287,7 @@ mod tests {
                     // Use catch_unwind to handle panics in decoder threads
                     let decode_result =
                         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            decompress_from_stream::<SIZE, i16, _, u16>(&mut reader)
+                            decompress_from_stream(&mut reader)
                         }));
 
                     match decode_result {

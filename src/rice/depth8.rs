@@ -36,7 +36,7 @@ where
 
     // Write the k low bits of x
     if k > 0 {
-        stream.write_val_bits(k as u32, (x & ((1 << k) - 1)))?;
+        stream.write_val_bits(k as u32, x & ((1 << k) - 1))?;
     }
 
     Ok(())
@@ -114,7 +114,6 @@ mod tests {
         writer.write_bit(true).expect("write one");
         writer.write_val_bits(2u32, 2u8).expect("write two bits");
         writer.flush().expect("flush");
-        drop(writer);
 
         let mut reader = make_reader(buf);
 

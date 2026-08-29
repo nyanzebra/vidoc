@@ -3,9 +3,16 @@ use std::{
     mem::size_of,
 };
 
-use super::{decompress_from_stream, Jpg};
+use rayon::{iter::ParallelIterator as _, slice::ParallelSlice as _};
+
+use super::Jpg;
 use crate::{
+    block::{quantization::Quantizor, Block},
+    color::{Subsampling, Ycbcr},
+    dimensions::PixelDimensions,
+    encoders::ans,
     image::Image,
+    lossy::{reconstruct_pixels, subsample_into_block_ycbcr, SubSampleBlockGroupRef},
     pixels::{Rgb8, Rgb8Ref, Rgba8, Rgba8Ref},
     BitStreamReader, BitStreamWriter, Decodable, Encodable, Result,
 };
@@ -20,7 +27,7 @@ impl Encodable for Jpg<'_, Rgb8Ref<'_>> {
         let dimensions = self.image.dimensions();
         let ycbcr = self.image.pixels().to_ycbcr();
 
-        self.compress_to_stream::<SIZE, i16, _>(dimensions, &ycbcr, stream)
+        self.compress_to_stream(dimensions, &ycbcr, stream)
     }
 }
 
@@ -32,7 +39,7 @@ impl Encodable for Jpg<'_, Rgba8Ref<'_>> {
         let dimensions = self.image.dimensions();
         let ycbcr = self.image.pixels().to_ycbcr();
 
-        self.compress_to_stream::<SIZE, i16, _>(dimensions, &ycbcr, stream)
+        self.compress_to_stream(dimensions, &ycbcr, stream)
     }
 }
 
@@ -43,7 +50,7 @@ impl Decodable for Jpg<'_, Rgb8> {
     where
         R: Read,
     {
-        let (dimensions, subsampling, pixels) = decompress_from_stream::<SIZE, i16, _, u8>(stream)?;
+        let (dimensions, subsampling, pixels) = decompress_from_stream(stream)?;
 
         Ok(Image::new(dimensions, Rgb8::new(pixels), subsampling))
     }
@@ -56,10 +63,185 @@ impl Decodable for Jpg<'_, Rgba8> {
     where
         R: Read,
     {
-        let (dimensions, subsampling, pixels) = decompress_from_stream::<SIZE, i16, _, u8>(stream)?;
+        let (dimensions, subsampling, pixels) = decompress_from_stream(stream)?;
 
         Ok(Image::new(dimensions, Rgba8::new(pixels), subsampling))
     }
+}
+
+impl Jpg<'_, Rgb8Ref<'_>> {
+    pub(crate) fn compress_to_stream<W>(
+        &self,
+        dimensions: PixelDimensions,
+        ycbcr: &[Ycbcr],
+        stream: &mut BitStreamWriter<W>,
+    ) -> Result<()>
+    where
+        W: Write,
+    {
+        dimensions.encode(stream)?;
+        self.subsampling.encode(stream)?;
+
+        let sub_sample_block_group =
+            subsample_into_block_ycbcr(dimensions, ycbcr, self.subsampling);
+        let SubSampleBlockGroupRef { y, cb, cr, .. } = sub_sample_block_group.as_ref();
+
+        let lumi_quantizor = Quantizor::<i16>::image_luminance();
+        let chroma_quantizor = Quantizor::<i16>::image_chrominance();
+
+        let y_dct: Vec<i16> = y
+            .iter()
+            .flat_map(|block| {
+                lumi_quantizor
+                    .quantize(Block::<i16>::from(*block).dct())
+                    .zigzag()
+                    .into_iter()
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        let cb_dct: Vec<i16> = cb
+            .iter()
+            .flat_map(|block| {
+                chroma_quantizor
+                    .quantize(Block::<i16>::from(*block).dct())
+                    .zigzag()
+                    .into_iter()
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        let cr_dct: Vec<i16> = cr
+            .iter()
+            .flat_map(|block| {
+                chroma_quantizor
+                    .quantize(Block::<i16>::from(*block).dct())
+                    .zigzag()
+                    .into_iter()
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        ans::encode_raw(&y_dct, stream)?;
+        ans::encode_raw(&cb_dct, stream)?;
+        ans::encode_raw(&cr_dct, stream)?;
+
+        stream.flush()
+    }
+}
+
+impl Jpg<'_, Rgba8Ref<'_>> {
+    pub(crate) fn compress_to_stream<W>(
+        &self,
+        dimensions: PixelDimensions,
+        ycbcr: &[Ycbcr],
+        stream: &mut BitStreamWriter<W>,
+    ) -> Result<()>
+    where
+        W: Write,
+    {
+        dimensions.encode(stream)?;
+        self.subsampling.encode(stream)?;
+
+        let sub_sample_block_group =
+            subsample_into_block_ycbcr(dimensions, ycbcr, self.subsampling);
+        let SubSampleBlockGroupRef { y, cb, cr, .. } = sub_sample_block_group.as_ref();
+
+        let lumi_quantizor = Quantizor::<i16>::image_luminance();
+        let chroma_quantizor = Quantizor::<i16>::image_chrominance();
+
+        let y_dct: Vec<i16> = y
+            .iter()
+            .flat_map(|block| {
+                lumi_quantizor
+                    .quantize(Block::<i16>::from(*block).dct())
+                    .zigzag()
+                    .into_iter()
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        let cb_dct: Vec<i16> = cb
+            .iter()
+            .flat_map(|block| {
+                chroma_quantizor
+                    .quantize(Block::<i16>::from(*block).dct())
+                    .zigzag()
+                    .into_iter()
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        let cr_dct: Vec<i16> = cr
+            .iter()
+            .flat_map(|block| {
+                chroma_quantizor
+                    .quantize(Block::<i16>::from(*block).dct())
+                    .zigzag()
+                    .into_iter()
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        ans::encode_raw(&y_dct, stream)?;
+        ans::encode_raw(&cb_dct, stream)?;
+        ans::encode_raw(&cr_dct, stream)?;
+
+        stream.flush()
+    }
+}
+
+pub(crate) fn decompress_from_stream<R, T>(
+    stream: &mut BitStreamReader<R>,
+) -> Result<(PixelDimensions, Subsampling, Vec<T>)>
+where
+    R: Read,
+    T: num_traits::Bounded + num_traits::FromPrimitive + num_traits::ToPrimitive + Send + Sync,
+{
+    let dimensions = PixelDimensions::decode(stream)?;
+    let subsampling = Subsampling::decode(stream)?;
+
+    let lumi_quantizor = Quantizor::<i16>::image_luminance();
+    let chroma_quantizor = Quantizor::<i16>::image_chrominance();
+
+    let y: Vec<Block<f32>> = ans::decode_raw::<SIZE, i16, _>(stream)?
+        .par_chunks_exact(Block::<i16>::size())
+        .map(|chunk| {
+            Block::<f32>::from(
+                lumi_quantizor
+                    .dequantize(Block::<i16>::from(chunk).zagzig())
+                    .idct(),
+            )
+        })
+        .collect();
+
+    let cb: Vec<Block<f32>> = ans::decode_raw::<SIZE, i16, _>(stream)?
+        .par_chunks_exact(Block::<i16>::size())
+        .map(|chunk| {
+            Block::<f32>::from(
+                chroma_quantizor
+                    .dequantize(Block::<i16>::from(chunk).zagzig())
+                    .idct(),
+            )
+        })
+        .collect();
+
+    let cr: Vec<Block<f32>> = ans::decode_raw::<SIZE, i16, _>(stream)?
+        .par_chunks_exact(Block::<i16>::size())
+        .map(|chunk| {
+            Block::<f32>::from(
+                chroma_quantizor
+                    .dequantize(Block::<i16>::from(chunk).zagzig())
+                    .idct(),
+            )
+        })
+        .collect();
+
+    Ok((
+        dimensions,
+        subsampling,
+        reconstruct_pixels(dimensions, &y, &cb, &cr, None, subsampling),
+    ))
 }
 
 #[cfg(test)]
@@ -69,7 +251,7 @@ mod tests {
     use image::GenericImageView as _;
 
     use super::*;
-    use crate::{color::Subsampling, image::ImageRgb8, lossy::jpg::decompress_from_stream};
+    use crate::{color::Subsampling, image::ImageRgb8};
 
     #[test]
     #[ntest::timeout(300000)] // 5 minutes timeout - should be plenty now
@@ -117,8 +299,7 @@ mod tests {
                     // Decompress directly to Vec<u8> without wrapping in Image struct
                     let now = Instant::now();
                     let (dimensions, subsampling, pixels) =
-                        decompress_from_stream::<SIZE, i16, _, u8>(&mut reader)
-                            .expect("decompress");
+                        decompress_from_stream(&mut reader).expect("decompress");
                     let elapsed = now.elapsed();
                     println!("Decompression time: {elapsed:?}");
                     println!("Decoded pixels length: {}", pixels.len());

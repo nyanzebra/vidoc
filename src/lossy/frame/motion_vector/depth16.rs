@@ -56,7 +56,7 @@ pub(crate) fn ldsp_blocks(
         exhaustive_refine(current, reference, dimensions, point, best, best_score);
 
     // Stage 4: Half-pixel refinement using 6-tap interpolation
-    const ENABLE_SUBPIXEL_ME: bool = true;
+    const ENABLE_SUBPIXEL_ME: bool = false;
 
     if ENABLE_SUBPIXEL_ME {
         half_pixel_refine(

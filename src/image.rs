@@ -101,13 +101,13 @@ where
 }
 
 impl ImageRgb8 {
-    pub fn subsample_into_block_ycbcr(&self) -> SubSampleBlockGroup<f64> {
+    pub fn subsample_into_block_ycbcr(&self) -> SubSampleBlockGroup<f32> {
         subsample_into_block_ycbcr(self.dimensions, &self.pixels.to_ycbcr(), self.subsampling)
     }
 }
 
 impl ImageRgb16 {
-    pub fn subsample_into_block_ycbcr(&self) -> SubSampleBlockGroup<f64> {
+    pub fn subsample_into_block_ycbcr(&self) -> SubSampleBlockGroup<f32> {
         subsample_into_block_ycbcr(self.dimensions, &self.pixels.to_ycbcr(), self.subsampling)
     }
 }

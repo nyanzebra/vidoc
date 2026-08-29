@@ -5,7 +5,7 @@ use std::{
 
 use num_traits::{Bounded, FromPrimitive, NumCast, ToPrimitive, Unsigned};
 use rayon::prelude::*;
-use wide::f64x4;
+use wide::f32x4;
 
 use crate::{
     bitstream::{BitStreamReader, BitStreamWriter},
@@ -26,10 +26,10 @@ pub struct Rgba<T> {
 // https://en.wikipedia.org/wiki/YCbCr
 #[derive(Copy, Clone, Debug)]
 pub struct Ycbcr {
-    pub y: f64,
-    pub cb: f64,
-    pub cr: f64,
-    pub a: f64,
+    pub y: f32,
+    pub cb: f32,
+    pub cr: f32,
+    pub a: f32,
 }
 
 pub enum YCBCRChannels {
@@ -42,25 +42,25 @@ pub enum YCBCRChannels {
 // https://en.wikipedia.org/wiki/YCbCr
 // BT.2020 luma coefficients (Rec. ITU-R BT.2020)
 pub mod bt2020 {
-    pub const KR: f64 = 0.2627; // Red coefficient
-    pub const KG: f64 = 0.6780; // Green coefficient
-    pub const KB: f64 = 0.0593; // Blue coefficient
+    pub const KR: f32 = 0.2627; // Red coefficient
+    pub const KG: f32 = 0.6780; // Green coefficient
+    pub const KB: f32 = 0.0593; // Blue coefficient
 
     // Derived coefficients for Cb (Blue-Yellow chroma)
-    pub const CB_R: f64 = -KR / (2.0 * (1.0 - KB)); // -0.2215
-    pub const CB_G: f64 = -KG / (2.0 * (1.0 - KB)); // -0.3607
-    pub const CB_B: f64 = 0.5; // 0.5000
+    pub const CB_R: f32 = -KR / (2.0 * (1.0 - KB)); // -0.2215
+    pub const CB_G: f32 = -KG / (2.0 * (1.0 - KB)); // -0.3607
+    pub const CB_B: f32 = 0.5; // 0.5000
 
     // Derived coefficients for Cr (Red-Cyan chroma)
-    pub const CR_R: f64 = 0.5; // 0.5000
-    pub const CR_G: f64 = -KG / (2.0 * (1.0 - KR)); // -0.4598
-    pub const CR_B: f64 = -KB / (2.0 * (1.0 - KR)); // -0.0402
+    pub const CR_R: f32 = 0.5; // 0.5000
+    pub const CR_G: f32 = -KG / (2.0 * (1.0 - KR)); // -0.4598
+    pub const CR_B: f32 = -KB / (2.0 * (1.0 - KR)); // -0.0402
 
     // Inverse transformation coefficients (for YCbCr to RGB)
-    pub const Y_TO_R_CR: f64 = 2.0 * (1.0 - KR); // 1.4746
-    pub const Y_TO_G_CB: f64 = -2.0 * KB * (1.0 - KB) / KG; // -0.1645
-    pub const Y_TO_G_CR: f64 = -2.0 * KR * (1.0 - KR) / KG; // -0.5713
-    pub const Y_TO_B_CB: f64 = 2.0 * (1.0 - KB); // 1.8814
+    pub const Y_TO_R_CR: f32 = 2.0 * (1.0 - KR); // 1.4746
+    pub const Y_TO_G_CB: f32 = -2.0 * KB * (1.0 - KB) / KG; // -0.1645
+    pub const Y_TO_G_CR: f32 = -2.0 * KR * (1.0 - KR) / KG; // -0.5713
+    pub const Y_TO_B_CB: f32 = 2.0 * (1.0 - KB); // 1.8814
 }
 
 pub fn rgba_to_ycbcr<T>(rgba: &Rgba<T>) -> Ycbcr
@@ -68,38 +68,38 @@ where
     T: Copy + Bounded + NumCast + Unsigned,
 {
     let Rgba { r, g, b, a } = rgba;
-    let r = r.to_f64().expect("f64");
-    let g = g.to_f64().expect("f64");
-    let b = b.to_f64().expect("f64");
-    let a = a.to_f64().expect("f64");
+    let r = r.to_f32().expect("f32");
+    let g = g.to_f32().expect("f32");
+    let b = b.to_f32().expect("f32");
+    let a = a.to_f32().expect("f32");
 
-    let center = (T::max_value().to_f64().expect("f64") + 1.0) / 2f64;
+    let center = (T::max_value().to_f32().expect("f32") + 1.0) / 2f32;
 
-    let y = f64::algebraic_add(
-        f64::algebraic_add(
-            f64::algebraic_mul(bt2020::KR, r),
-            f64::algebraic_mul(bt2020::KG, g),
+    let y = f32::algebraic_add(
+        f32::algebraic_add(
+            f32::algebraic_mul(bt2020::KR, r),
+            f32::algebraic_mul(bt2020::KG, g),
         ),
-        f64::algebraic_mul(bt2020::KB, b),
+        f32::algebraic_mul(bt2020::KB, b),
     );
-    let cb = f64::algebraic_add(
+    let cb = f32::algebraic_add(
         center,
-        f64::algebraic_add(
-            f64::algebraic_add(
-                f64::algebraic_mul(bt2020::CB_R, r),
-                f64::algebraic_mul(bt2020::CB_G, g),
+        f32::algebraic_add(
+            f32::algebraic_add(
+                f32::algebraic_mul(bt2020::CB_R, r),
+                f32::algebraic_mul(bt2020::CB_G, g),
             ),
-            f64::algebraic_mul(bt2020::CB_B, b),
+            f32::algebraic_mul(bt2020::CB_B, b),
         ),
     );
-    let cr = f64::algebraic_add(
+    let cr = f32::algebraic_add(
         center,
-        f64::algebraic_add(
-            f64::algebraic_add(
-                f64::algebraic_mul(bt2020::CR_R, r),
-                f64::algebraic_mul(bt2020::CR_G, g),
+        f32::algebraic_add(
+            f32::algebraic_add(
+                f32::algebraic_mul(bt2020::CR_R, r),
+                f32::algebraic_mul(bt2020::CR_G, g),
             ),
-            f64::algebraic_mul(bt2020::CR_B, b),
+            f32::algebraic_mul(bt2020::CR_B, b),
         ),
     );
 
@@ -111,20 +111,20 @@ where
     T: Bounded + FromPrimitive + ToPrimitive,
 {
     let Ycbcr { y, cb, cr, a } = *ycbcr;
-    let center = (T::max_value().to_f64().expect("f64") + 1.0) / 2f64;
+    let center = (T::max_value().to_f32().expect("f32") + 1.0) / 2f32;
 
     let cb = cb - center;
     let cr = cr - center;
 
-    let r = f64::algebraic_add(y, f64::algebraic_mul(bt2020::Y_TO_R_CR, cr));
-    let g = f64::algebraic_add(
+    let r = f32::algebraic_add(y, f32::algebraic_mul(bt2020::Y_TO_R_CR, cr));
+    let g = f32::algebraic_add(
         y,
-        f64::algebraic_add(
-            f64::algebraic_mul(bt2020::Y_TO_G_CB, cb),
-            f64::algebraic_mul(bt2020::Y_TO_G_CR, cr),
+        f32::algebraic_add(
+            f32::algebraic_mul(bt2020::Y_TO_G_CB, cb),
+            f32::algebraic_mul(bt2020::Y_TO_G_CR, cr),
         ),
     );
-    let b = f64::algebraic_add(y, f64::algebraic_mul(bt2020::Y_TO_B_CB, cb));
+    let b = f32::algebraic_add(y, f32::algebraic_mul(bt2020::Y_TO_B_CB, cb));
 
     Rgba {
         r: clamp(r),
@@ -137,7 +137,7 @@ where
 /// SIMD-accelerated batch conversion of YCbCr to RGBA
 /// Processes 4 pixels at a time using SIMD instructions
 #[inline]
-fn ycbcr_to_rgba_simd_batch(y: &[f64], cb: &[f64], cr: &[f64], center: f64) -> Vec<Rgba<u8>> {
+fn ycbcr_to_rgba_simd_batch(y: &[f32], cb: &[f32], cr: &[f32], center: f32) -> Vec<Rgba<u8>> {
     assert_eq!(y.len(), cb.len());
     assert_eq!(y.len(), cr.len());
 
@@ -150,21 +150,21 @@ fn ycbcr_to_rgba_simd_batch(y: &[f64], cb: &[f64], cr: &[f64], center: f64) -> V
         let idx = i * 4;
 
         // Load 4 pixels into SIMD registers
-        let y_vec = f64x4::new([y[idx], y[idx + 1], y[idx + 2], y[idx + 3]]);
-        let cb_vec = f64x4::new([cb[idx], cb[idx + 1], cb[idx + 2], cb[idx + 3]]);
-        let cr_vec = f64x4::new([cr[idx], cr[idx + 1], cr[idx + 2], cr[idx + 3]]);
+        let y_vec = f32x4::new([y[idx], y[idx + 1], y[idx + 2], y[idx + 3]]);
+        let cb_vec = f32x4::new([cb[idx], cb[idx + 1], cb[idx + 2], cb[idx + 3]]);
+        let cr_vec = f32x4::new([cr[idx], cr[idx + 1], cr[idx + 2], cr[idx + 3]]);
 
         // Center the chroma values
-        let center_vec = f64x4::splat(center);
+        let center_vec = f32x4::splat(center);
         let cb_centered = cb_vec - center_vec;
         let cr_centered = cr_vec - center_vec;
 
         // YCbCr to RGB conversion (vectorized)
-        let r_vec = y_vec + cr_centered * f64x4::splat(bt2020::Y_TO_R_CR);
+        let r_vec = y_vec + cr_centered * f32x4::splat(bt2020::Y_TO_R_CR);
         let g_vec = y_vec
-            + cb_centered * f64x4::splat(bt2020::Y_TO_G_CB)
-            + cr_centered * f64x4::splat(bt2020::Y_TO_G_CR);
-        let b_vec = y_vec + cb_centered * f64x4::splat(bt2020::Y_TO_B_CB);
+            + cb_centered * f32x4::splat(bt2020::Y_TO_G_CB)
+            + cr_centered * f32x4::splat(bt2020::Y_TO_G_CR);
+        let b_vec = y_vec + cb_centered * f32x4::splat(bt2020::Y_TO_B_CB);
 
         // Convert to array and clamp to u8
         let r_arr = r_vec.to_array();
@@ -199,11 +199,11 @@ fn ycbcr_to_rgba_simd_batch(y: &[f64], cb: &[f64], cr: &[f64], center: f64) -> V
 ///
 /// This function automatically uses SIMD acceleration when processing
 /// large batches of pixels for maximum performance.
-pub fn ycbcr_batch_to_rgba(y: &[f64], cb: &[f64], cr: &[f64]) -> Vec<Rgba<u8>> {
+pub fn ycbcr_batch_to_rgba(y: &[f32], cb: &[f32], cr: &[f32]) -> Vec<Rgba<u8>> {
     assert_eq!(y.len(), cb.len());
     assert_eq!(y.len(), cr.len());
 
-    let center = (u8::MAX as f64 + 1.0) / 2.0;
+    let center = (u8::MAX as f32 + 1.0) / 2.0;
 
     // Use SIMD for batches of 16+ pixels when available
     // Check for SIMD support based on target architecture
@@ -438,7 +438,7 @@ pub fn subsample_ycbcr(
     dimensions: PixelDimensions,
     ycbcr: &[Ycbcr],
     subsampling: Subsampling,
-) -> SubSampleGroup<f64> {
+) -> SubSampleGroup<f32> {
     // Extract Y channel (always full resolution)
     let y = ycbcr.par_iter().map(|pixel| pixel.y).collect::<Vec<_>>();
 
@@ -452,7 +452,7 @@ pub fn subsample_ycbcr(
             let chroma_w = width.div_ceil(2);
             let chroma_h = height.div_ceil(2);
 
-            let (sampled_cb, sampled_cr): (Vec<f64>, Vec<f64>) = (0..chroma_h)
+            let (sampled_cb, sampled_cr): (Vec<f32>, Vec<f32>) = (0..chroma_h)
                 .into_par_iter()
                 .flat_map(|row| {
                     (0..chroma_w)
@@ -499,7 +499,7 @@ pub fn subsample_ycbcr(
 
             let chroma_w = width.div_ceil(4);
 
-            let (sampled_cb, sampled_cr): (Vec<f64>, Vec<f64>) = (0..height)
+            let (sampled_cb, sampled_cr): (Vec<f32>, Vec<f32>) = (0..height)
                 .into_par_iter()
                 .flat_map(|r| (0..chroma_w).into_par_iter().map(move |col| (r, col * 4)))
                 .map(|(r, c)| {
@@ -541,7 +541,7 @@ pub fn subsample_ycbcr(
 
             let chroma_w = width.div_ceil(2);
 
-            let (sampled_cb, sampled_cr): (Vec<f64>, Vec<f64>) = (0..height)
+            let (sampled_cb, sampled_cr): (Vec<f32>, Vec<f32>) = (0..height)
                 .into_par_iter()
                 .flat_map(|r| (0..chroma_w).into_par_iter().map(move |col| (r, col * 2)))
                 .map(|(r, c)| {
@@ -570,7 +570,7 @@ pub fn subsample_ycbcr(
         // - full vertical
         Subsampling::Sample444 => {
             // Single parallel pass: extract all three channels at once
-            let (cb, cr): (Vec<f64>, Vec<f64>) =
+            let (cb, cr): (Vec<f32>, Vec<f32>) =
                 ycbcr.par_iter().map(|pixel| (pixel.cb, pixel.cr)).unzip();
 
             SubSampleGroup {
@@ -594,11 +594,11 @@ pub struct UpSampleGroup<T> {
 // https://en.wikipedia.org/wiki/Chroma_subsampling
 pub fn upsample_ycbcr(
     dimensions: PixelDimensions,
-    y: Vec<f64>,
-    cb: Vec<f64>,
-    cr: Vec<f64>,
+    y: Vec<f32>,
+    cb: Vec<f32>,
+    cr: Vec<f32>,
     subsampling: Subsampling,
-) -> UpSampleGroup<f64> {
+) -> UpSampleGroup<f32> {
     match subsampling {
         // 420:
         // - half horizontal
@@ -856,8 +856,8 @@ mod tests {
         for r in 0..height {
             for c in 0..width {
                 // Create varied color pattern for testing
-                let normalized_r = r as f64 / height as f64;
-                let normalized_c = c as f64 / width as f64;
+                let normalized_r = r as f32 / height as f32;
+                let normalized_c = c as f32 / width as f32;
                 data.push(Ycbcr {
                     y: (normalized_r + normalized_c) / 2.0,
                     cb: normalized_c - 0.5,
@@ -955,8 +955,8 @@ mod tests {
         let dimensions = PixelDimensions { width, height };
         let pixel_count = width * height;
 
-        let y: Vec<f64> = (0..pixel_count)
-            .map(|i| i as f64 / pixel_count as f64)
+        let y: Vec<f32> = (0..pixel_count)
+            .map(|i| i as f32 / pixel_count as f32)
             .collect();
         let cb = y.clone();
         let cr = y.clone();
@@ -983,11 +983,11 @@ mod tests {
         let pixel_count = width * height;
         let chroma_count = pixel_count / 2; // 422 has half the chroma samples
 
-        let y: Vec<f64> = (0..pixel_count)
-            .map(|i| i as f64 / pixel_count as f64)
+        let y: Vec<f32> = (0..pixel_count)
+            .map(|i| i as f32 / pixel_count as f32)
             .collect();
-        let cb: Vec<f64> = (0..chroma_count)
-            .map(|i| i as f64 / chroma_count as f64)
+        let cb: Vec<f32> = (0..chroma_count)
+            .map(|i| i as f32 / chroma_count as f32)
             .collect();
         let cr = cb.clone();
 
@@ -1007,11 +1007,11 @@ mod tests {
         let pixel_count = width * height;
         let chroma_count = (width / 2) * (height / 2); // 420 has 1/4 the chroma samples
 
-        let y: Vec<f64> = (0..pixel_count)
-            .map(|i| i as f64 / pixel_count as f64)
+        let y: Vec<f32> = (0..pixel_count)
+            .map(|i| i as f32 / pixel_count as f32)
             .collect();
-        let cb: Vec<f64> = (0..chroma_count)
-            .map(|i| i as f64 / chroma_count as f64)
+        let cb: Vec<f32> = (0..chroma_count)
+            .map(|i| i as f32 / chroma_count as f32)
             .collect();
         let cr = cb.clone();
 
@@ -1045,11 +1045,11 @@ mod tests {
         let pixel_count = width * height;
         let chroma_count = pixel_count / 4; // 411 has 1/4 the chroma samples
 
-        let y: Vec<f64> = (0..pixel_count)
-            .map(|i| i as f64 / pixel_count as f64)
+        let y: Vec<f32> = (0..pixel_count)
+            .map(|i| i as f32 / pixel_count as f32)
             .collect();
-        let cb: Vec<f64> = (0..chroma_count)
-            .map(|i| i as f64 / chroma_count as f64)
+        let cb: Vec<f32> = (0..chroma_count)
+            .map(|i| i as f32 / chroma_count as f32)
             .collect();
         let cr = cb.clone();
 
@@ -1200,14 +1200,14 @@ mod tests {
 
         for (width, height) in test_cases {
             let pixel_count = width * height;
-            let data_size_mb = (pixel_count * 3 * 8) as f64 / (1024.0 * 1024.0); // 3 channels * 8 bytes per f64
+            let data_size_mb = (pixel_count * 3 * 8) as f32 / (1024.0 * 1024.0); // 3 channels * 8 bytes per f32
             let dimensions = PixelDimensions { width, height };
 
             println!(
                 "\n📺 {}x{} ({:.1}MP, {:.1}MB YCbCr data):",
                 width,
                 height,
-                pixel_count as f64 / 1_000_000.0,
+                pixel_count as f32 / 1_000_000.0,
                 data_size_mb
             );
 
@@ -1252,15 +1252,15 @@ mod tests {
                 let avg_time = times.iter().sum::<std::time::Duration>() / times.len() as u32;
                 let min_time = times.iter().min().unwrap();
                 let max_time = times.iter().max().unwrap();
-                let throughput_mp_s = (pixel_count as f64 / 1_000_000.0) / avg_time.as_secs_f64();
-                let throughput_mb_s = data_size_mb / avg_time.as_secs_f64();
+                let throughput_mp_s = (pixel_count as f32 / 1_000_000.0) / avg_time.as_secs_f32();
+                let throughput_mb_s = data_size_mb / avg_time.as_secs_f32();
 
                 println!(
                     "   {:?}: {:6.1}ms (min: {:5.1}ms, max: {:5.1}ms) | {:6.1} MP/s | {:6.1} MB/s",
                     subsampling,
-                    avg_time.as_secs_f64() * 1000.0,
-                    min_time.as_secs_f64() * 1000.0,
-                    max_time.as_secs_f64() * 1000.0,
+                    avg_time.as_secs_f32() * 1000.0,
+                    min_time.as_secs_f32() * 1000.0,
+                    max_time.as_secs_f32() * 1000.0,
                     throughput_mp_s,
                     throughput_mb_s
                 );
@@ -1296,32 +1296,32 @@ mod tests {
                 "\n📺 {}x{} ({:.1}MP):",
                 width,
                 height,
-                pixel_count as f64 / 1_000_000.0
+                pixel_count as f32 / 1_000_000.0
             );
 
             for subsampling in &subsampling_modes {
                 // Create appropriately sized test data for each subsampling mode
-                let y: Vec<f64> = (0..pixel_count)
-                    .map(|i| i as f64 / pixel_count as f64)
+                let y: Vec<f32> = (0..pixel_count)
+                    .map(|i| i as f32 / pixel_count as f32)
                     .collect();
                 let (cb, cr) = match subsampling {
                     Subsampling::Sample444 => {
-                        let cb: Vec<f64> = (0..pixel_count)
-                            .map(|i| (i as f64 / pixel_count as f64) * 0.5)
+                        let cb: Vec<f32> = (0..pixel_count)
+                            .map(|i| (i as f32 / pixel_count as f32) * 0.5)
                             .collect();
                         let cr = cb.clone();
                         (cb, cr)
                     }
                     Subsampling::Sample422 => {
-                        let cb: Vec<f64> = (0..pixel_count / 2)
-                            .map(|i| (i as f64 / (pixel_count / 2) as f64) * 0.5)
+                        let cb: Vec<f32> = (0..pixel_count / 2)
+                            .map(|i| (i as f32 / (pixel_count / 2) as f32) * 0.5)
                             .collect();
                         let cr = cb.clone();
                         (cb, cr)
                     }
                     Subsampling::Sample420 | Subsampling::Sample411 => {
-                        let cb: Vec<f64> = (0..pixel_count / 4)
-                            .map(|i| (i as f64 / (pixel_count / 4) as f64) * 0.5)
+                        let cb: Vec<f32> = (0..pixel_count / 4)
+                            .map(|i| (i as f32 / (pixel_count / 4) as f32) * 0.5)
                             .collect();
                         let cr = cb.clone();
                         (cb, cr)
@@ -1352,14 +1352,14 @@ mod tests {
                 let avg_time = times.iter().sum::<std::time::Duration>() / times.len() as u32;
                 let min_time = times.iter().min().unwrap();
                 let max_time = times.iter().max().unwrap();
-                let throughput_mp_s = (pixel_count as f64 / 1_000_000.0) / avg_time.as_secs_f64();
+                let throughput_mp_s = (pixel_count as f32 / 1_000_000.0) / avg_time.as_secs_f32();
 
                 println!(
                     "   {:?}: {:6.1}ms (min: {:5.1}ms, max: {:5.1}ms) | {:6.1} MP/s",
                     subsampling,
-                    avg_time.as_secs_f64() * 1000.0,
-                    min_time.as_secs_f64() * 1000.0,
-                    max_time.as_secs_f64() * 1000.0,
+                    avg_time.as_secs_f32() * 1000.0,
+                    min_time.as_secs_f32() * 1000.0,
+                    max_time.as_secs_f32() * 1000.0,
                     throughput_mp_s
                 );
             }
@@ -1397,27 +1397,27 @@ mod tests {
         let avg_time = times.iter().sum::<std::time::Duration>() / times.len() as u32;
         let min_time = times.iter().min().unwrap();
         let std_dev = {
-            let mean = avg_time.as_secs_f64();
+            let mean = avg_time.as_secs_f32();
             let variance = times
                 .iter()
-                .map(|t| (t.as_secs_f64() - mean).powi(2))
-                .sum::<f64>()
-                / times.len() as f64;
+                .map(|t| (t.as_secs_f32() - mean).powi(2))
+                .sum::<f32>()
+                / times.len() as f32;
             variance.sqrt()
         };
 
-        let throughput_mp_s = (pixel_count as f64 / 1_000_000.0) / avg_time.as_secs_f64();
+        let throughput_mp_s = (pixel_count as f32 / 1_000_000.0) / avg_time.as_secs_f32();
         let efficiency_target = 5.0; // Target: under 5ms for 720p Sample420
 
         println!(
             "Sample420 (720p): {:6.1}ms ± {:4.1}ms | Min: {:5.1}ms | {:6.1} MP/s",
-            avg_time.as_secs_f64() * 1000.0,
+            avg_time.as_secs_f32() * 1000.0,
             std_dev * 1000.0,
-            min_time.as_secs_f64() * 1000.0,
+            min_time.as_secs_f32() * 1000.0,
             throughput_mp_s
         );
 
-        if avg_time.as_secs_f64() * 1000.0 < efficiency_target {
+        if avg_time.as_secs_f32() * 1000.0 < efficiency_target {
             println!("✅ OPTIMIZATION SUCCESS: Memory allocation optimization is effective!");
         } else {
             println!(
@@ -1469,15 +1469,15 @@ mod tests {
             }
 
             let avg_time = times.iter().sum::<std::time::Duration>() / times.len() as u32;
-            let throughput_mp_s = (pixel_count as f64 / 1_000_000.0) / avg_time.as_secs_f64();
-            let pixels_per_ms = pixel_count as f64 / (avg_time.as_secs_f64() * 1000.0);
+            let throughput_mp_s = (pixel_count as f32 / 1_000_000.0) / avg_time.as_secs_f32();
+            let pixels_per_ms = pixel_count as f32 / (avg_time.as_secs_f32() * 1000.0);
 
             println!(
                 "{}x{} ({:5.1}MP): {:6.1}ms | {:8.0} px/ms | {:6.1} MP/s",
                 width,
                 height,
-                pixel_count as f64 / 1_000_000.0,
-                avg_time.as_secs_f64() * 1000.0,
+                pixel_count as f32 / 1_000_000.0,
+                avg_time.as_secs_f32() * 1000.0,
                 pixels_per_ms,
                 throughput_mp_s
             );

@@ -13,9 +13,7 @@ use crate::{
     block::{quantization::Quantizor, Block},
     color::Subsampling,
     dimensions::BlockDimensions,
-    lossy::{
-        frame::reconstruct_blocks_from_macroblock, SubSampleBlockGroup, SubSampleBlockGroupRef,
-    },
+    lossy::{frame::reconstruct_blocks_from_macroblock, SubSampleBlockGroup},
     BitStreamReader, BitStreamWriter, Decodable, Encodable, Result,
 };
 
@@ -38,8 +36,8 @@ impl Encodable for IFrame<i16> {
         let cb = self.0.cb();
         let cr = self.0.cr();
 
-        let lumi_quantizor = Quantizor::<i16>::static_video_luminance();
-        let chroma_quantizor = Quantizor::<i16>::static_video_chrominance();
+        let lumi_quantizor = Quantizor::<i16>::video_luminance();
+        let chroma_quantizor = Quantizor::<i16>::video_chrominance();
 
         // Encode all the metadata
         dimensions.encode(stream)?;
@@ -53,16 +51,10 @@ impl Encodable for IFrame<i16> {
         // separate full sweeps over all block data.
         let y: Vec<Block<i16>> = y
             .par_iter()
-            .map(|block| {
-                lumi_quantizor
-                    .quantize(block.convert_to().dct().convert_to())
-                    .zigzag()
-                    .convert_to()
-            })
+            .map(|block| lumi_quantizor.quantize(block.dct()).zigzag())
             .collect();
 
         IMacroBlocks::new(build_macro_blocks(&y, dimensions)).encode(stream)?;
-        stream.flush()?;
 
         let chroma_dimensions = dimensions.subsample(subsampling);
 
@@ -70,21 +62,14 @@ impl Encodable for IFrame<i16> {
             .par_iter()
             .zip(cr.par_iter())
             .map(|(cb_block, cr_block)| {
-                let cb_enc = chroma_quantizor
-                    .quantize(cb_block.convert_to().dct().convert_to())
-                    .zigzag()
-                    .convert_to();
-                let cr_enc = chroma_quantizor
-                    .quantize(cr_block.convert_to().dct().convert_to())
-                    .zigzag()
-                    .convert_to();
+                let cb_enc = chroma_quantizor.quantize(cb_block.dct()).zigzag();
+                let cr_enc = chroma_quantizor.quantize(cr_block.dct()).zigzag();
+
                 (cb_enc, cr_enc)
             })
             .unzip();
 
         IMacroBlocks::new(build_macro_blocks(&cb_enc, chroma_dimensions)).encode(stream)?;
-        stream.flush()?;
-
         IMacroBlocks::new(build_macro_blocks(&cr_enc, chroma_dimensions)).encode(stream)?;
 
         stream.flush()?;
@@ -94,7 +79,7 @@ impl Encodable for IFrame<i16> {
 }
 
 impl Decodable for IFrame<i16> {
-    type Output = SubSampleBlockGroup<f64>;
+    type Output = SubSampleBlockGroup<f32>;
 
     fn decode<R>(stream: &mut BitStreamReader<R>) -> Result<Self::Output>
     where
@@ -110,19 +95,14 @@ impl Decodable for IFrame<i16> {
                 .expect("subsampling"),
         );
 
-        let y_macros: Vec<IMacroBlock<f64>> = IMacroBlocks::<i16>::decode(stream)?
+        let y_macros: Vec<IMacroBlock<f32>> = IMacroBlocks::<i16>::decode(stream)?
             .into_inner()
             .into_par_iter()
             .map(|mb| {
-                let processed_blocks: Vec<Block<f64>> = mb
+                let processed_blocks: Vec<Block<f32>> = mb
                     .blocks
                     .iter()
-                    .map(|block| {
-                        lumi_quantizor
-                            .dequantize(block.zagzig())
-                            .convert_to()
-                            .idct()
-                    })
+                    .map(|block| lumi_quantizor.dequantize(block.zagzig()).idct().into())
                     .collect();
 
                 IMacroBlock {
@@ -134,19 +114,14 @@ impl Decodable for IFrame<i16> {
 
         stream.align_to_byte()?;
 
-        let cb_macros: Vec<IMacroBlock<f64>> = IMacroBlocks::<i16>::decode(stream)?
+        let cb_macros: Vec<IMacroBlock<f32>> = IMacroBlocks::<i16>::decode(stream)?
             .into_inner()
             .into_par_iter()
             .map(|mb| {
-                let processed_blocks: Vec<Block<f64>> = mb
+                let processed_blocks: Vec<Block<f32>> = mb
                     .blocks
                     .iter()
-                    .map(|block| {
-                        chroma_quantizor
-                            .dequantize(block.zagzig())
-                            .convert_to()
-                            .idct()
-                    })
+                    .map(|block| chroma_quantizor.dequantize(block.zagzig()).idct().into())
                     .collect();
 
                 IMacroBlock {
@@ -158,19 +133,14 @@ impl Decodable for IFrame<i16> {
 
         stream.align_to_byte()?;
 
-        let cr_macros: Vec<IMacroBlock<f64>> = IMacroBlocks::<i16>::decode(stream)?
+        let cr_macros: Vec<IMacroBlock<f32>> = IMacroBlocks::<i16>::decode(stream)?
             .into_inner()
             .into_par_iter()
             .map(|mb| {
-                let processed_blocks: Vec<Block<f64>> = mb
+                let processed_blocks: Vec<Block<f32>> = mb
                     .blocks
                     .iter()
-                    .map(|block| {
-                        chroma_quantizor
-                            .dequantize(block.zagzig())
-                            .convert_to()
-                            .idct()
-                    })
+                    .map(|block| chroma_quantizor.dequantize(block.zagzig()).idct().into())
                     .collect();
 
                 IMacroBlock {
@@ -181,7 +151,7 @@ impl Decodable for IFrame<i16> {
             .collect();
 
         // Reconstruct the block arrays using macroblock locations
-        let mut y = vec![Block::<f64>::default(); dimensions.width * dimensions.height];
+        let mut y = vec![Block::<f32>::default(); dimensions.width * dimensions.height];
         for mb in y_macros {
             reconstruct_blocks_from_macroblock(&mb, &mut y, dimensions.width);
         }
@@ -189,170 +159,13 @@ impl Decodable for IFrame<i16> {
         let chroma_dimensions = dimensions.subsample(subsampling);
 
         let mut cb =
-            vec![Block::<f64>::default(); chroma_dimensions.width * chroma_dimensions.height];
+            vec![Block::<f32>::default(); chroma_dimensions.width * chroma_dimensions.height];
         for mb in cb_macros {
             reconstruct_blocks_from_macroblock(&mb, &mut cb, chroma_dimensions.width);
         }
 
         let mut cr =
-            vec![Block::<f64>::default(); chroma_dimensions.width * chroma_dimensions.height];
-        for mb in cr_macros {
-            reconstruct_blocks_from_macroblock(&mb, &mut cr, chroma_dimensions.width);
-        }
-
-        Ok(SubSampleBlockGroup::new(dimensions, subsampling, y, cb, cr))
-    }
-}
-
-impl Encodable for IFrame<i32> {
-    fn encode<W>(&self, stream: &mut BitStreamWriter<W>) -> Result<()>
-    where
-        W: Write,
-    {
-        let SubSampleBlockGroupRef {
-            dimensions,
-            subsampling,
-            y,
-            cb,
-            cr,
-        } = self.0.as_ref();
-
-        let lumi_quantizor = Quantizor::<i32>::static_video_luminance();
-        let chroma_quantizor = Quantizor::<i32>::static_video_chrominance();
-
-        // Encode all the metadata
-        dimensions.encode(stream)?;
-        lumi_quantizor.encode(stream)?;
-        chroma_quantizor.encode(stream)?;
-        stream.write(u8::from(subsampling))?;
-
-        let y_blocks_i32: Vec<Block<i32>> = y
-            .par_iter()
-            .map(|block| {
-                lumi_quantizor
-                    .quantize(block.convert_to().dct().convert_to())
-                    .zigzag()
-            })
-            .collect();
-
-        IMacroBlocks::new(build_macro_blocks(&y_blocks_i32, dimensions)).encode(stream)?;
-        stream.flush()?;
-
-        let chroma_dimensions = dimensions.subsample(subsampling);
-
-        let cb_blocks_i32: Vec<Block<i32>> = cb
-            .par_iter()
-            .map(|block| {
-                chroma_quantizor
-                    .quantize(block.convert_to().dct().convert_to())
-                    .zigzag()
-            })
-            .collect();
-
-        IMacroBlocks::new(build_macro_blocks(&cb_blocks_i32, chroma_dimensions)).encode(stream)?;
-        stream.flush()?;
-
-        let cr_blocks_i32: Vec<Block<i32>> = cr
-            .par_iter()
-            .map(|block| {
-                chroma_quantizor
-                    .quantize(block.convert_to().dct().convert_to())
-                    .zigzag()
-            })
-            .collect();
-
-        IMacroBlocks::new(build_macro_blocks(&cr_blocks_i32, chroma_dimensions)).encode(stream)?;
-        stream.flush()
-    }
-}
-
-impl Decodable for IFrame<i32> {
-    type Output = SubSampleBlockGroup<f64>;
-
-    fn decode<R>(stream: &mut BitStreamReader<R>) -> Result<Self::Output>
-    where
-        R: Read,
-    {
-        let dimensions = BlockDimensions::decode(stream).expect("dimensions");
-        let lumi_quantizor = Quantizor::<i32>::decode(stream).expect("luma");
-        let chroma_quantizor = Quantizor::<i32>::decode(stream).expect("chroma");
-        let subsampling = Subsampling::from(
-            stream
-                .read::<u8>()
-                .expect("stream is not empty")
-                .expect("subsampling"),
-        );
-
-        let y_macros: Vec<IMacroBlock<f64>> = IMacroBlocks::<i32>::decode(stream)?
-            .into_inner()
-            .into_par_iter()
-            .map(|mb| {
-                let processed_blocks: Vec<Block<f64>> = mb
-                    .blocks
-                    .iter()
-                    .map(|block| lumi_quantizor.dequantize(*block).convert_to().idct())
-                    .collect();
-
-                IMacroBlock {
-                    location: mb.location,
-                    blocks: processed_blocks,
-                }
-            })
-            .collect();
-
-        stream.align_to_byte()?;
-
-        let cb_macros: Vec<IMacroBlock<f64>> = IMacroBlocks::<i32>::decode(stream)?
-            .into_inner()
-            .into_par_iter()
-            .map(|mb| {
-                let processed_blocks: Vec<Block<f64>> = mb
-                    .blocks
-                    .iter()
-                    .map(|block| chroma_quantizor.dequantize(*block).convert_to().idct())
-                    .collect();
-
-                IMacroBlock {
-                    location: mb.location,
-                    blocks: processed_blocks,
-                }
-            })
-            .collect();
-
-        stream.align_to_byte()?;
-
-        let cr_macros: Vec<IMacroBlock<f64>> = IMacroBlocks::<i32>::decode(stream)?
-            .into_inner()
-            .into_par_iter()
-            .map(|mb| {
-                let processed_blocks: Vec<Block<f64>> = mb
-                    .blocks
-                    .iter()
-                    .map(|block| chroma_quantizor.dequantize(*block).convert_to().idct())
-                    .collect();
-
-                IMacroBlock {
-                    location: mb.location,
-                    blocks: processed_blocks,
-                }
-            })
-            .collect();
-
-        let mut y = vec![Block::<f64>::default(); dimensions.width * dimensions.height];
-        for mb in y_macros {
-            reconstruct_blocks_from_macroblock(&mb, &mut y, dimensions.width);
-        }
-
-        let chroma_dimensions = dimensions.subsample(subsampling);
-
-        let mut cb =
-            vec![Block::<f64>::default(); chroma_dimensions.width * chroma_dimensions.height];
-        for mb in cb_macros {
-            reconstruct_blocks_from_macroblock(&mb, &mut cb, chroma_dimensions.width);
-        }
-
-        let mut cr =
-            vec![Block::<f64>::default(); chroma_dimensions.width * chroma_dimensions.height];
+            vec![Block::<f32>::default(); chroma_dimensions.width * chroma_dimensions.height];
         for mb in cr_macros {
             reconstruct_blocks_from_macroblock(&mb, &mut cr, chroma_dimensions.width);
         }
@@ -369,7 +182,10 @@ mod tests {
 
     use super::{Encodable, *};
     use crate::{
-        dimensions::PixelDimensions, image::ImageRgb8, lossy::reconstruct_pixels, pixels::Rgb8,
+        dimensions::PixelDimensions,
+        image::ImageRgb8,
+        lossy::{reconstruct_pixels, SubSampleBlockGroupRef},
+        pixels::Rgb8,
     };
 
     impl<T> IFrame<T> {
@@ -394,21 +210,21 @@ mod tests {
         let mut cr_blocks = Vec::new();
 
         for i in 0..(width * height) {
-            let pattern_val = (i % 256) as f64 - 128.0;
+            let pattern_val = (i % 256) as f32 - 128.0;
 
             // Y channel - main luminance data
-            let mut y_data = [0.0f64; 64];
+            let mut y_data = [0.0f32; 64];
             for j in 0..64 {
-                y_data[j] = pattern_val + (j as f64 % 8.0);
+                y_data[j] = pattern_val + (j as f32 % 8.0);
             }
-            let y_block = Block::from(y_data).convert_to::<i16>();
+            let y_block = Block::from(y_data).into();
 
             // Cb and Cr channels - chroma data
             let cb_val = pattern_val / 4.0;
             let cr_val = pattern_val / 8.0;
 
-            let cb_block = Block::from([cb_val; 64]).convert_to::<i16>();
-            let cr_block = Block::from([cr_val; 64]).convert_to::<i16>();
+            let cb_block = Block::from([cb_val; 64]).into();
+            let cr_block = Block::from([cr_val; 64]).into();
 
             y_blocks.push(y_block);
             cb_blocks.push(cb_block);
@@ -457,7 +273,7 @@ mod tests {
 
         let subsampling = Subsampling::Sample444;
         let img = ImageRgb8::new(dimensions, Rgb8::new(data.clone()), subsampling);
-        let subsampled = img.subsample_into_block_ycbcr().convert_to::<i16>();
+        let subsampled = img.subsample_into_block_ycbcr().into();
         let iframe = IFrame::new(subsampled);
 
         // Encode
@@ -485,15 +301,15 @@ mod tests {
 
         let pixels = reconstruct_pixels(
             dimensions.into(),
-            &y,
-            &cb,
-            &cr,
+            y,
+            cb,
+            cr,
             // No alpha channel
             None,
             subsampling,
         );
 
-        let decoded_image = image::RgbImage::from_raw(width as u32, height as u32, pixels.into())
+        let decoded_image = image::RgbImage::from_raw(width as u32, height as u32, pixels)
             .expect("create decoded test pattern");
         decoded_image
             .save(output_dir.join("spatial_test_decoded.jpg"))
@@ -532,168 +348,165 @@ mod tests {
         );
         println!("Total pixels: {}\n", dimensions.width * dimensions.height);
 
-        match image.color() {
-            image::ColorType::Rgb8 => {
-                let image = image.into_rgb8();
-                let data = image.to_vec();
+        if image.color() == image::ColorType::Rgb8 {
+            let image = image.into_rgb8();
+            let data = image.to_vec();
 
-                // Test each subsampling type
-                for subsampling in subsampling_types {
-                    println!("========================================");
-                    println!("Testing {input_path} with {subsampling:?}");
-                    println!("========================================");
+            // Test each subsampling type
+            for subsampling in subsampling_types {
+                println!("========================================");
+                println!("Testing {input_path} with {subsampling:?}");
+                println!("========================================");
 
-                    // Debug: Check first few pixels of input
+                // Debug: Check first few pixels of input
+                println!(
+                    "  First input pixel: R={}, G={}, B={}",
+                    data[0], data[1], data[2]
+                );
+
+                // DEBUG: Check original pixels at different locations
+                let width = dimensions.width as usize;
+                if data.len() >= (100 * width + 100) * 3 {
+                    let idx = (100 * width + 100) * 3;
                     println!(
-                        "  First input pixel: R={}, G={}, B={}",
-                        data[0], data[1], data[2]
+                        "  Original pixel at (100,100): R={}, G={}, B={}",
+                        data[idx],
+                        data[idx + 1],
+                        data[idx + 2]
                     );
-
-                    // DEBUG: Check original pixels at different locations
-                    let width = dimensions.width as usize;
-                    if data.len() >= (100 * width + 100) * 3 {
-                        let idx = (100 * width + 100) * 3;
-                        println!(
-                            "  Original pixel at (100,100): R={}, G={}, B={}",
-                            data[idx],
-                            data[idx + 1],
-                            data[idx + 2]
-                        );
-                    }
-                    if data.len() >= (500 * width + 500) * 3 {
-                        let idx = (500 * width + 500) * 3;
-                        println!(
-                            "  Original pixel at (500,500): R={}, G={}, B={}",
-                            data[idx],
-                            data[idx + 1],
-                            data[idx + 2]
-                        );
-                    }
-
-                    let img = ImageRgb8::new(dimensions, Rgb8::new(data.clone()), subsampling);
-                    let subsampled_f64 = img.subsample_into_block_ycbcr();
-
-                    // Debug: Check YCbCr values after conversion
-                    if let (Some(first_y_block), Some(first_cb_block), Some(first_cr_block)) = (
-                        subsampled_f64.y().first(),
-                        subsampled_f64.cb().first(),
-                        subsampled_f64.cr().first(),
-                    ) {
-                        let first_y = first_y_block.0[0];
-                        let first_cb = first_cb_block.0[0];
-                        let first_cr = first_cr_block.0[0];
-                        println!(
-                            "  First YCbCr after conversion: Y={:.1}, Cb={:.1}, Cr={:.1}",
-                            first_y, first_cb, first_cr
-                        );
-                    }
-
-                    let subsampled = subsampled_f64.convert_to::<i16>();
-                    let iframe = IFrame::new(subsampled);
-
-                    // Encode
-                    let mut writer = BitStreamWriter::new(VecDeque::new());
-                    iframe.encode(&mut writer).expect("encode");
-                    let writer_inner = writer.into_inner();
-                    let encoded_size = writer_inner.len();
-                    println!("  Encoded size: {encoded_size} bytes");
-
-                    // Decode
-                    let mut reader = BitStreamReader::new(writer_inner);
-                    let ssbg = IFrame::<i16>::decode(&mut reader).expect("decode");
-                    let dimensions = ssbg.dimensions();
-                    let subsampling = ssbg.subsampling();
-                    let y = ssbg.y();
-                    let cb = ssbg.cb();
-                    let cr = ssbg.cr();
-
-                    // DEBUG: Check decoded block values
-                    if let (Some(first_cb_block), Some(first_cr_block)) = (cb.first(), cr.first()) {
-                        println!(
-                            "  Decoded Cb block[0][0]={}, Cr block[0][0]={}",
-                            first_cb_block.0[0], first_cr_block.0[0]
-                        );
-                    }
-
-                    let pixel_dimensions: PixelDimensions = dimensions.into();
-                    let mut pixels = reconstruct_pixels(
-                        pixel_dimensions,
-                        &y,
-                        &cb,
-                        &cr,
-                        // No alpha channel
-                        None,
-                        subsampling,
-                    );
-                    println!("  Decoded data length: {} bytes", pixels.len());
+                }
+                if data.len() >= (500 * width + 500) * 3 {
+                    let idx = (500 * width + 500) * 3;
                     println!(
-                        "  First output pixel: R={}, G={}, B={}",
-                        pixels[0], pixels[1], pixels[2]
+                        "  Original pixel at (500,500): R={}, G={}, B={}",
+                        data[idx],
+                        data[idx + 1],
+                        data[idx + 2]
                     );
+                }
 
-                    // DEBUG: Check pixels at different locations
-                    let width = pixel_dimensions.width;
-                    if pixels.len() >= (100 * width + 100) * 3 {
-                        let idx = (100 * width + 100) * 3;
-                        println!(
-                            "  Pixel at (100,100): R={}, G={}, B={}",
-                            pixels[idx],
-                            pixels[idx + 1],
-                            pixels[idx + 2]
-                        );
-                    }
-                    if pixels.len() >= (500 * width + 500) * 3 {
-                        let idx = (500 * width + 500) * 3;
-                        println!(
-                            "  Pixel at (500,500): R={}, G={}, B={}",
-                            pixels[idx],
-                            pixels[idx + 1],
-                            pixels[idx + 2]
-                        );
-                    }
+                let img = ImageRgb8::new(dimensions, Rgb8::new(data.clone()), subsampling);
+                let subsampled_f32 = img.subsample_into_block_ycbcr();
+
+                // Debug: Check YCbCr values after conversion
+                if let (Some(first_y_block), Some(first_cb_block), Some(first_cr_block)) = (
+                    subsampled_f32.y().first(),
+                    subsampled_f32.cb().first(),
+                    subsampled_f32.cr().first(),
+                ) {
+                    let first_y = first_y_block.0[0];
+                    let first_cb = first_cb_block.0[0];
+                    let first_cr = first_cr_block.0[0];
                     println!(
-                        "  Expected data length: {} bytes",
-                        pixel_dimensions.width * pixel_dimensions.height * 3
+                        "  First YCbCr after conversion: Y={:.1}, Cb={:.1}, Cr={:.1}",
+                        first_y, first_cb, first_cr
                     );
+                }
 
-                    // Verify the decoded data has the right size
-                    let expected_len = pixel_dimensions.width * pixel_dimensions.height * 3;
-                    if pixels.len() != expected_len {
-                        println!(
+                let subsampled = subsampled_f32.into();
+                let iframe = IFrame::new(subsampled);
+
+                // Encode
+                let mut writer = BitStreamWriter::new(VecDeque::new());
+                iframe.encode(&mut writer).expect("encode");
+                let writer_inner = writer.into_inner();
+                let encoded_size = writer_inner.len();
+                println!("  Encoded size: {encoded_size} bytes");
+
+                // Decode
+                let mut reader = BitStreamReader::new(writer_inner);
+                let ssbg = IFrame::<i16>::decode(&mut reader).expect("decode");
+                let dimensions = ssbg.dimensions();
+                let subsampling = ssbg.subsampling();
+                let y = ssbg.y();
+                let cb = ssbg.cb();
+                let cr = ssbg.cr();
+
+                // DEBUG: Check decoded block values
+                if let (Some(first_cb_block), Some(first_cr_block)) = (cb.first(), cr.first()) {
+                    println!(
+                        "  Decoded Cb block[0][0]={}, Cr block[0][0]={}",
+                        first_cb_block.0[0], first_cr_block.0[0]
+                    );
+                }
+
+                let pixel_dimensions: PixelDimensions = dimensions.into();
+                let mut pixels = reconstruct_pixels(
+                    pixel_dimensions,
+                    y,
+                    cb,
+                    cr,
+                    // No alpha channel
+                    None,
+                    subsampling,
+                );
+                println!("  Decoded data length: {} bytes", pixels.len());
+                println!(
+                    "  First output pixel: R={}, G={}, B={}",
+                    pixels[0], pixels[1], pixels[2]
+                );
+
+                // DEBUG: Check pixels at different locations
+                let width = pixel_dimensions.width;
+                if pixels.len() >= (100 * width + 100) * 3 {
+                    let idx = (100 * width + 100) * 3;
+                    println!(
+                        "  Pixel at (100,100): R={}, G={}, B={}",
+                        pixels[idx],
+                        pixels[idx + 1],
+                        pixels[idx + 2]
+                    );
+                }
+                if pixels.len() >= (500 * width + 500) * 3 {
+                    let idx = (500 * width + 500) * 3;
+                    println!(
+                        "  Pixel at (500,500): R={}, G={}, B={}",
+                        pixels[idx],
+                        pixels[idx + 1],
+                        pixels[idx + 2]
+                    );
+                }
+                println!(
+                    "  Expected data length: {} bytes",
+                    pixel_dimensions.width * pixel_dimensions.height * 3
+                );
+
+                // Verify the decoded data has the right size
+                let expected_len = pixel_dimensions.width * pixel_dimensions.height * 3;
+                if pixels.len() != expected_len {
+                    println!(
                         "WARNING: Decoded data length mismatch - got {} bytes, expected {} bytes",
                         pixels.len(),
                         expected_len
                     );
-                        println!("This suggests the Huffman decoder is producing too much data");
-                        // Don't fail the test for now - let's see the result
+                    println!("This suggests the Huffman decoder is producing too much data");
+                    // Don't fail the test for now - let's see the result
 
-                        pixels.truncate(expected_len);
-                    }
-
-                    // Save the decoded image
-                    let output_filename = format!("hummingbird_{subsampling:?}.jpg");
-                    let output_path = output_dir.join(output_filename);
-
-                    match image::RgbImage::from_raw(
-                        pixel_dimensions.width as u32,
-                        pixel_dimensions.height as u32,
-                        pixels,
-                    ) {
-                        Some(decoded_image) => {
-                            decoded_image
-                                .save(&output_path)
-                                .expect("save decoded image");
-
-                            // Blank line between subsampling types
-                        }
-                        None => {
-                            panic!("Could not create decoded image");
-                        }
-                    }
-                    // End of subsampling loop
+                    pixels.truncate(expected_len);
                 }
+
+                // Save the decoded image
+                let output_filename = format!("hummingbird_{subsampling:?}.jpg");
+                let output_path = output_dir.join(output_filename);
+
+                match image::RgbImage::from_raw(
+                    pixel_dimensions.width as u32,
+                    pixel_dimensions.height as u32,
+                    pixels,
+                ) {
+                    Some(decoded_image) => {
+                        decoded_image
+                            .save(&output_path)
+                            .expect("save decoded image");
+
+                        // Blank line between subsampling types
+                    }
+                    None => {
+                        panic!("Could not create decoded image");
+                    }
+                }
+                // End of subsampling loop
             }
-            _ => {}
         }
     }
 
@@ -722,7 +535,7 @@ mod tests {
                 let rgb8_image = image.into_rgb8();
                 let data = rgb8_image.to_vec();
                 let img = ImageRgb8::new(dimensions, Rgb8::new(data), subsampling);
-                let subsampled = img.subsample_into_block_ycbcr().convert_to::<i16>();
+                let subsampled = img.subsample_into_block_ycbcr().into();
                 let iframe = IFrame::new(subsampled);
 
                 // Encode
@@ -744,9 +557,9 @@ mod tests {
                 let pixel_dimensions: PixelDimensions = dimensions.into();
                 let pixels = reconstruct_pixels(
                     pixel_dimensions,
-                    &y,
-                    &cb,
-                    &cr,
+                    y,
+                    cb,
+                    cr,
                     // No alpha channel
                     None,
                     subsampling,
@@ -759,7 +572,7 @@ mod tests {
                 let decoded_image = image::RgbImage::from_raw(
                     pixel_dimensions.width as u32,
                     pixel_dimensions.height as u32,
-                    pixels.into(),
+                    pixels,
                 )
                 .expect("create decoded tif image");
 
@@ -771,7 +584,7 @@ mod tests {
                 let rgb8_image = image.into_rgb8();
                 let data = rgb8_image.to_vec();
                 let img = ImageRgb8::new(dimensions, Rgb8::new(data), subsampling);
-                let subsampled = img.subsample_into_block_ycbcr().convert_to::<i16>();
+                let subsampled = img.subsample_into_block_ycbcr().into();
                 let iframe = IFrame::new(subsampled);
 
                 // Encode
@@ -793,9 +606,9 @@ mod tests {
                 let pixel_dimensions: PixelDimensions = dimensions.into();
                 let pixels = reconstruct_pixels(
                     pixel_dimensions,
-                    &y,
-                    &cb,
-                    &cr,
+                    y,
+                    cb,
+                    cr,
                     // No alpha channel
                     None,
                     subsampling,
@@ -808,7 +621,7 @@ mod tests {
                 let decoded_image = image::RgbImage::from_raw(
                     pixel_dimensions.width as u32,
                     pixel_dimensions.height as u32,
-                    pixels.into(),
+                    pixels,
                 )
                 .expect("create decoded tif image");
 
@@ -865,7 +678,7 @@ mod tests {
             (Subsampling::Sample420, "420"),
         ] {
             let img = ImageRgb8::new(dimensions, Rgb8::new(data.clone()), subsampling);
-            let subsampled = img.subsample_into_block_ycbcr().convert_to::<i16>();
+            let subsampled = img.subsample_into_block_ycbcr().into();
             let iframe = IFrame::new(subsampled);
 
             // Encode
@@ -893,9 +706,9 @@ mod tests {
 
             let pixels = reconstruct_pixels(
                 dimensions.into(),
-                &y,
-                &cb,
-                &cr,
+                y,
+                cb,
+                cr,
                 // No alpha channel
                 None,
                 subsampling,
@@ -952,7 +765,7 @@ mod tests {
 
         // Encode with 444 (no subsampling) to isolate reconstruction issues
         let img = ImageRgb8::new(dimensions, Rgb8::new(data.clone()), Subsampling::Sample444);
-        let subsampled = img.subsample_into_block_ycbcr().convert_to::<i16>();
+        let subsampled = img.subsample_into_block_ycbcr().into();
         let iframe = IFrame::new(subsampled);
 
         let mut writer = BitStreamWriter::new(VecDeque::new());
@@ -969,9 +782,9 @@ mod tests {
 
         let pixels = reconstruct_pixels(
             dimensions.into(),
-            &y,
-            &cb,
-            &cr,
+            y,
+            cb,
+            cr,
             // No alpha channel
             None,
             subsampling,
@@ -1066,18 +879,18 @@ mod tests {
             (Subsampling::Sample420, "420"),
         ] {
             let img = ImageRgb8::new(dimensions, Rgb8::new(data.clone()), subsampling);
-            let subsampled = img.subsample_into_block_ycbcr().convert_to::<i16>();
+            let subsampled = img.subsample_into_block_ycbcr().into();
             let iframe = IFrame::new(subsampled);
 
             let mut writer = BitStreamWriter::new(VecDeque::new());
             iframe
                 .encode(&mut writer)
-                .expect(&format!("encode pure colors test {}", name));
+                .unwrap_or_else(|_| panic!("encode pure colors test {}", name));
             let writer_inner = writer.into_inner();
 
             let mut reader = BitStreamReader::new(writer_inner);
             let ssbg = IFrame::<i16>::decode(&mut reader)
-                .expect(&format!("decode pure colors test {}", name));
+                .unwrap_or_else(|_| panic!("decode pure colors test {}", name));
             let dimensions = ssbg.dimensions();
             let subsampling = ssbg.subsampling();
             let y = ssbg.y();
@@ -1086,18 +899,18 @@ mod tests {
 
             let pixels = reconstruct_pixels(
                 dimensions.into(),
-                &y,
-                &cb,
-                &cr,
+                y,
+                cb,
+                cr,
                 None, // No alpha channel
                 subsampling,
             );
             let decoded_image =
                 image::RgbImage::from_raw(width as u32, height as u32, pixels.clone())
-                    .expect(&format!("create decoded pure colors image {}", name));
+                    .unwrap_or_else(|| panic!("create decoded pure colors image {}", name));
             decoded_image
                 .save(output_dir.join(format!("pure_colors_decoded_{name}.jpg")))
-                .expect(&format!("save decoded pure colors image {}", name));
+                .unwrap_or_else(|_| panic!("save decoded pure colors image {}", name));
 
             // Check the center pixel of each 8x8 block (should be least affected by DCT artifacts)
             let test_positions = [(3, 3), (11, 3), (3, 11), (11, 11)];
@@ -1159,7 +972,7 @@ mod tests {
         let subsampling = Subsampling::Sample422;
 
         let img = ImageRgb8::new(dimensions, Rgb8::new(data.clone()), subsampling);
-        let subsampled = img.subsample_into_block_ycbcr().convert_to::<i16>();
+        let subsampled = img.subsample_into_block_ycbcr().into();
         let iframe = IFrame::new(subsampled);
 
         // Encode
@@ -1181,9 +994,9 @@ mod tests {
         // Save decoded
         let pixels = reconstruct_pixels(
             dimensions.into(),
-            &y,
-            &cb,
-            &cr,
+            y,
+            cb,
+            cr,
             None, // No alpha channel
             subsampling,
         );
@@ -1298,7 +1111,7 @@ mod tests {
         let data = vec![255u8; width * height * 3];
         let subsampling = Subsampling::Sample444;
         let img = ImageRgb8::new(dimensions, Rgb8::new(data), subsampling);
-        let subsampled = img.subsample_into_block_ycbcr().convert_to::<i16>();
+        let subsampled = img.subsample_into_block_ycbcr().into();
         let iframe = IFrame::new(subsampled);
 
         // Encode

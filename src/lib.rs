@@ -46,9 +46,9 @@ pub(crate) trait FromBytes {
         Self: Sized;
 }
 
-pub(crate) fn clamp<T>(val: f64) -> T
+pub(crate) fn clamp<T>(val: f32) -> T
 where
     T: Bounded + FromPrimitive + ToPrimitive,
 {
-    T::from_f64(val.clamp(0.0, T::max_value().to_f64().expect("to f64"))).expect("from f64")
+    T::from_f32(val.clamp(0.0, T::max_value().to_f32().expect("to f32"))).expect("from f32")
 }

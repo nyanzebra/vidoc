@@ -4,12 +4,12 @@ use std::{
     ops::{Add, AddAssign, Div, DivAssign, Index, IndexMut, Mul, Sub},
 };
 
-use num_traits::{Bounded, NumCast, Signed, ToPrimitive};
+use num_traits::{Bounded, Signed};
 
 use crate::{
     bitstream::{BitStreamReader, BitStreamWriter},
     error::Result,
-    Decodable, Encodable, Error, FromBytes, ToBytes,
+    Decodable, Encodable, FromBytes, ToBytes,
 };
 
 pub(crate) mod quantization;
@@ -281,46 +281,63 @@ impl<T> Block<T> {
     }
 }
 
-impl<T> Block<T>
-where
-    T: Copy + Default + NumCast,
-{
-    pub(crate) fn try_convert_from<U>(value: Block<U>) -> Result<Self>
-    where
-        U: Copy + ToPrimitive + 'static,
-    {
+impl From<Block<i16>> for Block<f32> {
+    fn from(value: Block<i16>) -> Self {
         let mut next = Block::default();
-        let is_float = std::any::TypeId::of::<U>() == std::any::TypeId::of::<f32>()
-            || std::any::TypeId::of::<U>() == std::any::TypeId::of::<f64>();
         for idx in 0..BLOCK_SIZE {
-            let converted_value = if is_float {
-                let f_val = value[idx].to_f64().ok_or(Error::BlockConversion)?;
-                <T as NumCast>::from(f_val.round()).ok_or(Error::BlockConversion)?
-            } else {
-                <T as NumCast>::from(value[idx]).ok_or(Error::BlockConversion)?
-            };
-            next[idx] = converted_value;
+            next[idx] = value[idx] as f32;
         }
-        Ok(next)
+        next
     }
 }
 
-impl<T> Block<T>
-where
-    T: Copy + ToPrimitive + 'static,
-{
-    pub(crate) fn try_convert_to<U>(self) -> Result<Block<U>>
-    where
-        U: Copy + Default + NumCast + 'static,
-    {
-        Block::<U>::try_convert_from(self)
+impl From<Block<i32>> for Block<f32> {
+    fn from(value: Block<i32>) -> Self {
+        let mut next = Block::default();
+        for idx in 0..BLOCK_SIZE {
+            next[idx] = value[idx] as f32;
+        }
+        next
     }
+}
 
-    pub fn convert_to<U>(self) -> Block<U>
-    where
-        U: Copy + Default + NumCast + 'static,
-    {
-        self.try_convert_to().unwrap()
+impl From<Block<f32>> for Block<i16> {
+    fn from(value: Block<f32>) -> Self {
+        let mut next = Block::default();
+        for idx in 0..BLOCK_SIZE {
+            next[idx] = value[idx].clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+        }
+        next
+    }
+}
+
+impl From<Block<f32>> for Block<i32> {
+    fn from(value: Block<f32>) -> Self {
+        let mut next = Block::default();
+        for idx in 0..BLOCK_SIZE {
+            next[idx] = value[idx].clamp(i32::MIN as f32, i32::MAX as f32) as i32;
+        }
+        next
+    }
+}
+
+impl From<Block<i32>> for Block<i16> {
+    fn from(value: Block<i32>) -> Self {
+        let mut next = Block::default();
+        for idx in 0..BLOCK_SIZE {
+            next[idx] = value[idx].clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        }
+        next
+    }
+}
+
+impl From<Block<i16>> for Block<i32> {
+    fn from(value: Block<i16>) -> Self {
+        let mut next = Block::default();
+        for idx in 0..BLOCK_SIZE {
+            next[idx] = value[idx] as i32;
+        }
+        next
     }
 }
 
@@ -658,45 +675,45 @@ mod tests {
     }
 
     #[test]
-    fn test_block_i16_to_f64() {
+    fn test_block_i16_to_f32() {
         let mut block: Block<i16> = Block::default();
         block.set(0, 0, 100);
         block.set(7, 7, -50);
 
-        let f64_block = block.convert_to::<f64>();
-        assert_eq!(f64_block.get(0, 0), 100.0);
-        assert_eq!(f64_block.get(7, 7), -50.0);
-        assert_eq!(f64_block.get(0, 1), 0.0);
+        let f32_block = Block::<f32>::from(block);
+        assert_eq!(f32_block.get(0, 0), 100.0);
+        assert_eq!(f32_block.get(7, 7), -50.0);
+        assert_eq!(f32_block.get(0, 1), 0.0);
     }
 
     #[test]
-    fn test_block_i32_to_f64() {
+    fn test_block_i32_to_f32() {
         let mut block: Block<i32> = Block::default();
         block.set(0, 0, 1000);
         block.set(7, 7, -500);
 
-        let f64_block = block.convert_to::<f64>();
-        assert_eq!(f64_block.get(0, 0), 1000.0);
-        assert_eq!(f64_block.get(7, 7), -500.0);
-        assert_eq!(f64_block.get(0, 1), 0.0);
+        let f32_block = Block::<f32>::from(block);
+        assert_eq!(f32_block.get(0, 0), 1000.0);
+        assert_eq!(f32_block.get(7, 7), -500.0);
+        assert_eq!(f32_block.get(0, 1), 0.0);
     }
 
     #[test]
-    fn test_block_f64_to_i32() {
-        let mut block: Block<f64> = Block::default();
+    fn test_block_f32_to_i32() {
+        let mut block: Block<f32> = Block::default();
         block.set(0, 0, 100.7);
         block.set(7, 7, -50.3);
         block.set(0, 1, 25.5);
 
-        let i32_block = block.convert_to::<i32>();
+        let i32_block = Block::<i32>::from(block);
         assert_eq!(i32_block.get(0, 0), 101); // 100.7 rounded
         assert_eq!(i32_block.get(7, 7), -50); // -50.3 rounded
         assert_eq!(i32_block.get(0, 1), 26); // 25.5 rounded
     }
 
     #[test]
-    fn test_block_f64_to_i32_rounding() {
-        let mut block: Block<f64> = Block::default();
+    fn test_block_f32_to_i32_rounding() {
+        let mut block: Block<f32> = Block::default();
         block.set(0, 0, 2.4); // Should round to 2
         block.set(0, 1, 2.5); // Should round to 3
         block.set(0, 2, 2.6); // Should round to 3
@@ -704,7 +721,7 @@ mod tests {
         block.set(1, 1, -2.5); // Should round to -3
         block.set(1, 2, -2.6); // Should round to -3
 
-        let i32_block = block.convert_to::<i32>();
+        let i32_block = Block::<i32>::from(block);
         assert_eq!(i32_block.get(0, 0), 2);
         assert_eq!(i32_block.get(0, 1), 3);
         assert_eq!(i32_block.get(0, 2), 3);
@@ -731,13 +748,13 @@ mod tests {
 
     #[test]
     fn test_mixed_type_operations() {
-        // Test conversion chain: i16 -> f64 -> i32
+        // Test conversion chain: i16 -> f32 -> i32
         let mut block_i16: Block<i16> = Block::default();
         block_i16.set(0, 0, 100);
         block_i16.set(7, 7, -50);
 
-        let block_f64 = block_i16.convert_to::<f64>();
-        let block_i32 = block_f64.convert_to::<i32>();
+        let block_f32 = Block::<f32>::from(block_i16);
+        let block_i32 = Block::<i32>::from(block_f32);
 
         assert_eq!(block_i32.get(0, 0), 100);
         assert_eq!(block_i32.get(7, 7), -50);

@@ -139,7 +139,7 @@ fn play_y4m_video(
         "   Framerate: {}/{} fps ({:.2} fps)",
         framerate.num,
         framerate.den,
-        framerate.num as f64 / framerate.den as f64
+        framerate.num as f32 / framerate.den as f32
     );
 
     println!(
@@ -183,7 +183,7 @@ fn play_y4m_video(
     println!(
         "   ✓ Loaded {} frames in {:.2}s",
         frames.len(),
-        start.elapsed().as_secs_f64()
+        start.elapsed().as_secs_f32()
     );
 
     // Compress with GOP
@@ -194,16 +194,16 @@ fn play_y4m_video(
 
     // YUV 4:2:0
     let original_size = frames.len() * width * height * 3 / 2;
-    let compression_ratio = compressed.len() as f64 / original_size as f64;
+    let compression_ratio = compressed.len() as f32 / original_size as f32;
 
-    println!("   ✓ Compressed in {:.2}s", encode_time.as_secs_f64());
+    println!("   ✓ Compressed in {:.2}s", encode_time.as_secs_f32());
     println!(
         "   Original size: {:.2} MB",
-        original_size as f64 / (1024.0 * 1024.0)
+        original_size as f32 / (1024.0 * 1024.0)
     );
     println!(
         "   Compressed size: {:.2} MB",
-        compressed.len() as f64 / (1024.0 * 1024.0)
+        compressed.len() as f32 / (1024.0 * 1024.0)
     );
     println!("   Compression ratio: {:.2}%", compression_ratio * 100.0);
     println!("   Bytes per frame: {}", compressed.len() / frames.len());
@@ -247,7 +247,7 @@ fn play_in_window(
 
     // Target 24 fps playback
     let target_fps = 24.0;
-    let frame_duration = std::time::Duration::from_secs_f64(1.0 / target_fps);
+    let frame_duration = std::time::Duration::from_secs_f32(1.0 / target_fps);
 
     // Create a channel for frame streaming
     // Buffer size: With GOP size of 6, buffer 12 frames (2 GOPs ahead)
@@ -270,14 +270,14 @@ fn play_in_window(
 
             if let Ok(decoded_frame) = decoded_result {
                 let decode_ms = frame_decode_start.elapsed().as_millis();
-                total_decode_time += frame_decode_start.elapsed().as_secs_f64();
+                total_decode_time += frame_decode_start.elapsed().as_secs_f32();
 
                 if verbose && frame_num % 30 == 0 {
                     println!(
                         "GOP decode: frame {} took {}ms (avg: {:.1}ms/frame)",
                         frame_num,
                         decode_ms,
-                        (total_decode_time * 1000.0) / (frame_num + 1) as f64
+                        (total_decode_time * 1000.0) / (frame_num + 1) as f32
                     );
                 }
                 frame_num += 1;
@@ -293,7 +293,7 @@ fn play_in_window(
             println!(
                 "✓ Decoding complete: {} frames, avg {:.1}ms/frame",
                 frame_num,
-                (total_decode_time * 1000.0) / frame_num as f64
+                (total_decode_time * 1000.0) / frame_num as f32
             );
         }
         // Send None to signal end of stream
@@ -331,24 +331,24 @@ fn play_in_window(
 
                 let decode_start = Instant::now();
                 frame_to_rgb_buffer_inplace(decoded_frame.data.clone(), width, height, &mut buffer);
-                decode_time += decode_start.elapsed().as_secs_f64();
+                decode_time += decode_start.elapsed().as_secs_f32();
 
                 let window_start = Instant::now();
                 window.update_with_buffer(&buffer, width, height)?;
-                window_time += window_start.elapsed().as_secs_f64();
+                window_time += window_start.elapsed().as_secs_f32();
 
                 frame_count += 1;
 
                 if frame_count % 30 == 0 {
-                    let elapsed = start.elapsed().as_secs_f64();
-                    let fps = frame_count as f64 / elapsed;
-                    let decode_fps = frame_count as f64 / decode_time;
+                    let elapsed = start.elapsed().as_secs_f32();
+                    let fps = frame_count as f32 / elapsed;
+                    let decode_fps = frame_count as f32 / decode_time;
                     println!(
                         "Frame {}: {:.1} fps total | Decode+Convert: {:.1} fps | Window: {:.1} fps",
                         frame_count,
                         fps,
                         decode_fps,
-                        frame_count as f64 / window_time
+                        frame_count as f32 / window_time
                     );
                 }
 
@@ -366,19 +366,19 @@ fn play_in_window(
     // Wait for decode thread to finish
     let _ = decode_thread.join();
 
-    let total_time = start.elapsed().as_secs_f64();
-    let avg_fps = frame_count as f64 / total_time;
+    let total_time = start.elapsed().as_secs_f32();
+    let avg_fps = frame_count as f32 / total_time;
     println!("\nPlayback complete!");
     println!("Average FPS: {:.1}", avg_fps);
     println!(
         "Color conversion time: {:.2}s ({:.1} fps)",
         decode_time,
-        frame_count as f64 / decode_time
+        frame_count as f32 / decode_time
     );
     println!(
         "Window time: {:.2}s ({:.1} fps)",
         window_time,
-        frame_count as f64 / window_time
+        frame_count as f32 / window_time
     );
 
     Ok(())
@@ -391,18 +391,18 @@ fn frame_to_rgb_buffer_inplace(
     height: usize,
     buffer: &mut [u32],
 ) {
-    // Convert i16 blocks to f64 in parallel
-    let y_f64: Vec<Block<f64>> = frame.y().par_iter().map(|b| b.convert_to()).collect();
-    let cb_f64: Vec<Block<f64>> = frame.cb().par_iter().map(|b| b.convert_to()).collect();
-    let cr_f64: Vec<Block<f64>> = frame.cr().par_iter().map(|b| b.convert_to()).collect();
+    // Convert i16 blocks to f32 in parallel
+    let y_f32: Vec<Block<f32>> = frame.y().par_iter().map(|b| (*b).into()).collect();
+    let cb_f32: Vec<Block<f32>> = frame.cb().par_iter().map(|b| (*b).into()).collect();
+    let cr_f32: Vec<Block<f32>> = frame.cr().par_iter().map(|b| (*b).into()).collect();
 
     // Reconstruct RGB pixels from YCbCr
     use vidoc::lossy::reconstruct_pixels;
     let rgb_u8: Vec<u8> = reconstruct_pixels(
         PixelDimensions { width, height },
-        &y_f64,
-        &cb_f64,
-        &cr_f64,
+        &y_f32,
+        &cb_f32,
+        &cr_f32,
         None,
         frame.subsampling(),
     );
@@ -598,9 +598,9 @@ fn encode_frames(
 
     println!(
         "   ✓ Encoding complete: {:.2}s ({:.1} fps, {:.1}ms/frame)",
-        encode_time.as_secs_f64(),
-        frames.len() as f64 / encode_time.as_secs_f64(),
-        (encode_time.as_secs_f64() * 1000.0) / frames.len() as f64
+        encode_time.as_secs_f32(),
+        frames.len() as f32 / encode_time.as_secs_f32(),
+        (encode_time.as_secs_f32() * 1000.0) / frames.len() as f32
     );
 
     Ok(compressed)

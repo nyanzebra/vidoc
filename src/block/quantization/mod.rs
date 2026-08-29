@@ -14,7 +14,7 @@ use super::Block;
 use crate::{BitStreamReader, BitStreamWriter, Decodable, Encodable, Result};
 
 #[rustfmt::skip]
-const IMAGE_LUMINANCE_QUANTIZATION: Block<i16> = Block([
+const IMAGE_LUMINANCE_QUANTIZATION_I16: Block<i16> = Block([
     16, 11, 10, 16, 24, 40, 51, 61,
     12, 12, 14, 19, 26, 58, 60, 55,
     14, 13, 16, 24, 40, 57, 69, 56,
@@ -26,7 +26,7 @@ const IMAGE_LUMINANCE_QUANTIZATION: Block<i16> = Block([
 ]);
 
 #[rustfmt::skip]
-const IMAGE_CHROMINANCE_QUANTIZATION: Block<i16> = Block([
+const IMAGE_CHROMINANCE_QUANTIZATION_I16: Block<i16> = Block([
     17, 18, 24, 47, 99, 99, 99, 99,
     18, 21, 26, 66, 99, 99, 99, 99,
     24, 26, 56, 99, 99, 99, 99, 99,
@@ -38,7 +38,7 @@ const IMAGE_CHROMINANCE_QUANTIZATION: Block<i16> = Block([
 ]);
 
 #[rustfmt::skip]
-const VIDEO_LUMINANCE_QUANTIZATION: Block<i16> = Block([
+const VIDEO_LUMINANCE_QUANTIZATION_I16: Block<i16> = Block([
     6,  5,  4,  6,  10, 16, 20, 24,
     5,  5,  6,  8,  10, 22, 24, 22,
     6,  6,  7,  10, 16, 22, 28, 22,
@@ -50,7 +50,7 @@ const VIDEO_LUMINANCE_QUANTIZATION: Block<i16> = Block([
 ]);
 
 #[rustfmt::skip]
-const VIDEO_CHROMINANCE_QUANTIZATION: Block<i16> = Block([
+const VIDEO_CHROMINANCE_QUANTIZATION_I16: Block<i16> = Block([
     6,  6,  8,  16, 32, 32, 32, 32,
     6,  7,  9,  22, 32, 32, 32, 32,
     8,  9,  18, 32, 32, 32, 32, 32,
@@ -61,88 +61,117 @@ const VIDEO_CHROMINANCE_QUANTIZATION: Block<i16> = Block([
     32, 32, 32, 32, 32, 32, 32, 32,
 ]);
 
-const REASONABLE_CLAMP_MIN: i16 = -32768;
-const REASONABLE_CLAMP_MAX: i16 = 32767;
+const REASONABLE_CLAMP_MIN_I16: i16 = i16::MIN;
+const REASONABLE_CLAMP_MAX_I16: i16 = i16::MAX;
+
+#[rustfmt::skip]
+const IMAGE_LUMINANCE_QUANTIZATION_I32: Block<i32> = Block([
+    16, 11, 10, 16, 24, 40, 51, 61,
+    12, 12, 14, 19, 26, 58, 60, 55,
+    14, 13, 16, 24, 40, 57, 69, 56,
+    14, 17, 22, 29, 51, 87, 80, 62,
+    18, 22, 37, 56, 68, 109, 103, 77,
+    24, 35, 55, 64, 81, 104, 113, 92,
+    49, 64, 78, 87, 103, 121, 120, 101,
+    72, 92, 95, 98, 112, 100, 103, 99,
+]);
+
+#[rustfmt::skip]
+const IMAGE_CHROMINANCE_QUANTIZATION_I32: Block<i32> = Block([
+    17, 18, 24, 47, 99, 99, 99, 99,
+    18, 21, 26, 66, 99, 99, 99, 99,
+    24, 26, 56, 99, 99, 99, 99, 99,
+    47, 66, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99,
+]);
+
+#[rustfmt::skip]
+const VIDEO_LUMINANCE_QUANTIZATION_I32: Block<i32> = Block([
+    6,  5,  4,  6,  10, 16, 20, 24,
+    5,  5,  6,  8,  10, 22, 24, 22,
+    6,  6,  7,  10, 16, 22, 28, 22,
+    6,  7,  9,  12, 20, 34, 32, 24,
+    7,  9,  15, 22, 26, 42, 40, 30,
+    10, 14, 22, 26, 32, 40, 44, 36,
+    20, 26, 30, 34, 40, 48, 48, 40,
+    28, 36, 38, 38, 44, 40, 40, 38,
+]);
+
+#[rustfmt::skip]
+const VIDEO_CHROMINANCE_QUANTIZATION_I32: Block<i32> = Block([
+    6,  6,  8,  16, 32, 32, 32, 32,
+    6,  7,  9,  22, 32, 32, 32, 32,
+    8,  9,  18, 32, 32, 32, 32, 32,
+    16, 22, 32, 32, 32, 32, 32, 32,
+    32, 32, 32, 32, 32, 32, 32, 32,
+    32, 32, 32, 32, 32, 32, 32, 32,
+    32, 32, 32, 32, 32, 32, 32, 32,
+    32, 32, 32, 32, 32, 32, 32, 32,
+]);
+
+const REASONABLE_CLAMP_MIN_I32: i32 = i32::MIN;
+const REASONABLE_CLAMP_MAX_I32: i32 = i32::MAX;
 
 #[derive(Copy, Clone, Debug)]
 pub struct Quantizor<T>(Block<T>);
 
-impl<T> Quantizor<T> {
-    pub(crate) fn new(base: Block<T>) -> Self {
-        Self(base)
-    }
-}
-
-impl<T> Quantizor<T>
-where
-    T: Copy + Default + NumCast,
-{
-    pub(crate) fn video_chrominance() -> Self {
-        Self::new(
-            Block::<T>::try_convert_from(VIDEO_CHROMINANCE_QUANTIZATION)
-                .expect("valid block type for video chrominance"),
-        )
-    }
-
-    pub(crate) fn video_luminance() -> Self {
-        Self::new(
-            Block::<T>::try_convert_from(VIDEO_LUMINANCE_QUANTIZATION)
-                .expect("valid block type for video luminance"),
-        )
-    }
-
-    pub(crate) fn image_chrominance() -> Self {
-        Self::new(
-            Block::<T>::try_convert_from(IMAGE_CHROMINANCE_QUANTIZATION)
-                .expect("valid block type for image chrominance"),
-        )
-    }
-
-    pub(crate) fn image_luminance() -> Self {
-        Self::new(
-            Block::<T>::try_convert_from(IMAGE_LUMINANCE_QUANTIZATION)
-                .expect("valid block type for image luminance"),
-        )
-    }
-}
-
 impl Quantizor<i16> {
-    pub(crate) fn static_video_luminance() -> &'static Self {
-        static Q: std::sync::OnceLock<Quantizor<i16>> = std::sync::OnceLock::new();
-        Q.get_or_init(Quantizor::video_luminance)
+    pub(crate) const fn image_luminance() -> Self {
+        Self(IMAGE_LUMINANCE_QUANTIZATION_I16)
     }
 
-    pub(crate) fn static_video_chrominance() -> &'static Self {
-        static Q: std::sync::OnceLock<Quantizor<i16>> = std::sync::OnceLock::new();
-        Q.get_or_init(Quantizor::video_chrominance)
+    pub(crate) const fn image_chrominance() -> Self {
+        Self(IMAGE_CHROMINANCE_QUANTIZATION_I16)
+    }
+
+    pub(crate) const fn video_luminance() -> Self {
+        Self(VIDEO_LUMINANCE_QUANTIZATION_I16)
+    }
+
+    pub(crate) const fn video_chrominance() -> Self {
+        Self(VIDEO_CHROMINANCE_QUANTIZATION_I16)
+    }
+
+    /// Quantize with clamping to i16 range to ensure values fit for array-based ANS encoding
+    pub fn quantize(&self, block: Block<i16>) -> Block<i16> {
+        (block / self.0).clamp(REASONABLE_CLAMP_MIN_I16, REASONABLE_CLAMP_MAX_I16)
+    }
+
+    pub(crate) fn dequantize(&self, block: Block<i16>) -> Block<i16> {
+        block * self.0
     }
 }
 
 impl Quantizor<i32> {
-    pub(crate) fn static_video_luminance() -> &'static Self {
+    pub(crate) fn image_luminance() -> &'static Self {
         static Q: std::sync::OnceLock<Quantizor<i32>> = std::sync::OnceLock::new();
-        Q.get_or_init(Quantizor::video_luminance)
+        Q.get_or_init(|| Self(IMAGE_LUMINANCE_QUANTIZATION_I32))
     }
 
-    pub(crate) fn static_video_chrominance() -> &'static Self {
+    pub(crate) fn image_chrominance() -> &'static Self {
         static Q: std::sync::OnceLock<Quantizor<i32>> = std::sync::OnceLock::new();
-        Q.get_or_init(Quantizor::video_chrominance)
+        Q.get_or_init(|| Self(IMAGE_CHROMINANCE_QUANTIZATION_I32))
     }
-}
 
-impl<T> Quantizor<T>
-where
-    T: Copy + Div<Output = T> + Mul<Output = T> + PartialOrd + NumCast + Bounded,
-{
+    pub(crate) fn video_luminance() -> &'static Self {
+        static Q: std::sync::OnceLock<Quantizor<i32>> = std::sync::OnceLock::new();
+        Q.get_or_init(|| Self(VIDEO_LUMINANCE_QUANTIZATION_I32))
+    }
+
+    pub(crate) fn video_chrominance() -> &'static Self {
+        static Q: std::sync::OnceLock<Quantizor<i32>> = std::sync::OnceLock::new();
+        Q.get_or_init(|| Self(VIDEO_CHROMINANCE_QUANTIZATION_I32))
+    }
+
     /// Quantize with clamping to i16 range to ensure values fit for array-based ANS encoding
-    pub fn quantize(&self, block: Block<T>) -> Block<T> {
-        let min_val = T::from(REASONABLE_CLAMP_MIN).unwrap_or_else(|| T::min_value());
-        let max_val = T::from(REASONABLE_CLAMP_MAX).unwrap_or_else(|| T::max_value());
-
-        (block / self.0).clamp(min_val, max_val)
+    pub fn quantize(&self, block: Block<i32>) -> Block<i32> {
+        (block / self.0).clamp(REASONABLE_CLAMP_MIN_I32, REASONABLE_CLAMP_MAX_I32)
     }
 
-    pub(crate) fn dequantize(&self, block: Block<T>) -> Block<T> {
+    pub(crate) fn dequantize(&self, block: Block<i32>) -> Block<i32> {
         block * self.0
     }
 }
