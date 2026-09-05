@@ -243,6 +243,7 @@ fn play_in_window(
     let ordering = Ordering {
         anchor_distance,
         full_image_distance,
+        ..Default::default()
     };
 
     // Target 24 fps playback
@@ -588,6 +589,7 @@ fn encode_frames(
     let ordering = Ordering {
         anchor_distance,
         full_image_distance,
+        ..Default::default()
     };
 
     let encode_start = Instant::now();

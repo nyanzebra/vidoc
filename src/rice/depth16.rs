@@ -13,7 +13,7 @@ where
     let mut remaining = high_bits;
     while remaining > 0 {
         let chunk = remaining.min(32);
-        stream.write_val_bits(chunk, 0u32)?;
+        stream.write_bits(chunk, 0u32)?;
         remaining -= chunk;
     }
     // Terminating 1 bit
@@ -21,7 +21,7 @@ where
 
     // Write k low bits
     if k > 0 {
-        stream.write_val_bits(k, x & ((1 << k) - 1))?;
+        stream.write_bits(k, x & ((1 << k) - 1))?;
     }
 
     Ok(())
@@ -38,7 +38,7 @@ where
     let low_bits: u32 = if k == 0 {
         0
     } else {
-        stream.read_val_bits::<u32>(k)?.unwrap_or(0)
+        stream.read_bits::<u32>(k)?.unwrap_or(0)
     };
 
     let x = (high_bits << k) | low_bits;

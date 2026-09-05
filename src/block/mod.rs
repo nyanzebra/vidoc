@@ -39,7 +39,7 @@ where
         R: std::io::Read,
     {
         let (block, size) =
-            Block::from_bytes(&stream.read_slice(Block::<T>::size() * std::mem::size_of::<T>())?);
+            Block::from_bytes(&stream.read_to_vec(Block::<T>::size() * std::mem::size_of::<T>())?);
         assert_eq!(size, Block::<T>::size() * std::mem::size_of::<T>());
         Ok(block)
     }
@@ -54,7 +54,7 @@ where
         W: Write,
     {
         let bytes = self.to_bytes();
-        stream.write_slice(&bytes)?;
+        stream.write_bytes(&bytes)?;
 
         Ok(())
     }

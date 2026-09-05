@@ -166,15 +166,13 @@ fn main() -> vidoc::error::Result<()> {
             let mut frame_idx = 0;
 
             // Decode frames one at a time without buffering GOPs
-            for decoded_result in gop_reader {
-                if let Ok(decoded_frame) = decoded_result {
-                    let blocks_f64 = decoded_frame.data.convert_to::<f64>();
-                    decoded_frames.push(blocks_f64);
-                    frame_idx += 1;
+            for decoded_frame in gop_reader.flatten() {
+                let blocks_f64 = SubSampleBlockGroup::<f32>::from(decoded_frame.data);
+                decoded_frames.push(blocks_f64);
+                frame_idx += 1;
 
-                    if frame_idx % 10 == 0 {
-                        println!("   Decoded {} frames...", frame_idx);
-                    }
+                if frame_idx % 10 == 0 {
+                    println!("   Decoded {} frames...", frame_idx);
                 }
             }
 
@@ -197,12 +195,7 @@ fn main() -> vidoc::error::Result<()> {
         height,
         WindowOptions::default(),
     )
-    .map_err(|e| {
-        vidoc::error::Error::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("{:?}", e),
-        ))
-    })?;
+    .map_err(|e| vidoc::error::Error::Io(std::io::Error::other(format!("{:?}", e))))?;
 
     window.set_target_fps(30);
 
@@ -227,7 +220,7 @@ fn main() -> vidoc::error::Result<()> {
                     Rgb8::new(rgb_data.clone()),
                     Subsampling::Sample420,
                 );
-                let subsampled = img.subsample_into_block_ycbcr().convert_to::<i16>();
+                let subsampled = img.subsample_into_block_ycbcr().into();
 
                 // Send to encoder
                 let _ = capture_tx.send(subsampled);
@@ -245,10 +238,7 @@ fn main() -> vidoc::error::Result<()> {
                 window
                     .update_with_buffer(&frame_buffer, width, height)
                     .map_err(|e| {
-                        vidoc::error::Error::Io(std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            format!("{:?}", e),
-                        ))
+                        vidoc::error::Error::Io(std::io::Error::other(format!("{:?}", e)))
                     })?;
 
                 captured_frames += 1;
@@ -295,12 +285,7 @@ fn main() -> vidoc::error::Result<()> {
             dec_dims.height,
             WindowOptions::default(),
         )
-        .map_err(|e| {
-            vidoc::error::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("{:?}", e),
-            ))
-        })?;
+        .map_err(|e| vidoc::error::Error::Io(std::io::Error::other(format!("{:?}", e))))?;
 
         window.set_target_fps(30);
 
@@ -314,9 +299,9 @@ fn main() -> vidoc::error::Result<()> {
             // Reconstruct RGB from decoded YCbCr
             let rgb_flat: Vec<u8> = vidoc::lossy::reconstruct_pixels(
                 dec_dims,
-                &decoded_blocks.as_ref().y,
-                &decoded_blocks.as_ref().cb,
-                &decoded_blocks.as_ref().cr,
+                decoded_blocks.as_ref().y,
+                decoded_blocks.as_ref().cb,
+                decoded_blocks.as_ref().cr,
                 None,
                 Subsampling::Sample420,
             );
@@ -332,12 +317,7 @@ fn main() -> vidoc::error::Result<()> {
 
             window
                 .update_with_buffer(&playback_buffer, dec_dims.width, dec_dims.height)
-                .map_err(|e| {
-                    vidoc::error::Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        format!("{:?}", e),
-                    ))
-                })?;
+                .map_err(|e| vidoc::error::Error::Io(std::io::Error::other(format!("{:?}", e))))?;
 
             if (idx + 1) % 10 == 0 {
                 println!("   Playing frame {}...", idx + 1);

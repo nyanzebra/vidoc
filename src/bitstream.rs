@@ -1,66 +1,20 @@
-//! Bitstream read/write layer, built on `bitstream-io`.
-//!
-//! # Why bitstream-io instead of the hand-rolled BitVec?
-//!
-//! The old implementation routed every write — including whole `u32`s — through
-//! a bit-by-bit insertion loop into a 4 KB heap buffer. This had two problems:
-//!
-//! 1. **Performance**: writing a `u32` cost 32 loop iterations. Profiling showed ~38% of total
-//!    encode time was inside `write_bits`/`Range::spec_next`.
-//!
-//! 2. **Correctness hazards**: `BitVec` maintained two independent positions (`write_pos`,
-//!    `read_pos`) with no way to safely bypass it. Every attempt to write raw bytes while the
-//!    bitvec held unflushed data corrupted the stream.
-//!
-//! `bitstream-io` uses a single `u8` accumulator. There is no separate buffer —
-//! whole-byte writes go directly to the underlying `Write`. `aligned_writer()` /
-//! `aligned_reader()` return `&mut W` / `&mut R` only when the accumulator is
-//! provably empty, making raw byte I/O safe by construction.
-//!
-//! # Endianness
-//!
-//! Big-endian (MSB first) throughout, matching the existing stream format.
-//!
-//! # API summary
-//!
-//! ## Writer
-//! | Method | Description |
-//! |--------|-------------|
-//! | `write_val(v: T)` | Write `T` using its full bit-width |
-//! | `write_val_bits(bits, v: T)` | Write `T` using `bits` bits (runtime) |
-//! | `write_bit(b)` | Write a single bit |
-//! | `write_bytes(&[u8])` | Write bytes through the bit layer |
-//! | `write_aligned_bytes(&[u8])` | Align then write raw bytes (fast path) |
-//! | `align_to_byte()` | Pad to next byte boundary |
-//! | `flush()` | Flush underlying writer |
-//!
-//! ## Reader
-//! | Method | Description |
-//! |--------|-------------|
-//! | `read_val::<T>()` | Read `T` using its full bit-width, `None` at EOF |
-//! | `read_val_bits::<T>(bits)` | Read `bits` bits into `T` (runtime) |
-//! | `read_bit()` | Read a single bit, `None` at EOF |
-//! | `read_vec(n)` | Read `n` bytes into a `Vec` |
-//! | `read_array::<N>()` | Read `N` bytes into a stack array |
-//! | `read_raw_bytes::<N>()` | Align then read `N` raw bytes (fast path) |
-//! | `align_to_byte()` | Discard bits to next byte boundary |
-//! | `count_leading_zeros()` | Count leading zero bits (for Rice decoding) |
-
 use std::io::{self, Read, Write};
 
 use bitstream_io::{BigEndian, BitRead, BitReader, BitWrite, BitWriter};
 
 use crate::{Error, Result};
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Writer
-// ─────────────────────────────────────────────────────────────────────────────
-
-pub struct BitStreamWriter<W: Write> {
+pub struct BitStreamWriter<W>
+where
+    W: Write,
+{
     inner: BitWriter<W, BigEndian>,
 }
 
-impl<W: Write> BitStreamWriter<W> {
+impl<W> BitStreamWriter<W>
+where
+    W: Write,
+{
     pub fn new(writer: W) -> Self {
         Self {
             inner: BitWriter::endian(writer, BigEndian),
@@ -68,11 +22,8 @@ impl<W: Write> BitStreamWriter<W> {
     }
 
     /// Write `T` using its full bit-width (e.g. `u32` → 32 bits, BE).
-    ///
-    /// Replaces the old `stream.write(val)`. For signed integers cast to
-    /// the unsigned equivalent first (`val as u32`), as the existing codebase does.
     #[inline]
-    pub fn write_val<T>(&mut self, val: T) -> Result<()>
+    pub fn write<T>(&mut self, val: T) -> Result<()>
     where
         T: bitstream_io::Integer,
     {
@@ -81,11 +32,8 @@ impl<W: Write> BitStreamWriter<W> {
     }
 
     /// Write `T` using a runtime-specified number of bits.
-    ///
-    /// Replaces the old `write_bits(value, len)` (note: arg order is now
-    /// `bits` first, `value` second to match bitstream-io convention).
     #[inline]
-    pub fn write_val_bits<T>(&mut self, bits: u32, val: T) -> Result<()>
+    pub fn write_bits<T>(&mut self, bits: u32, val: T) -> Result<()>
     where
         T: bitstream_io::Integer,
     {
@@ -108,10 +56,6 @@ impl<W: Write> BitStreamWriter<W> {
 
     /// Align to the next byte boundary, then write raw bytes directly to the
     /// underlying `Write`, bypassing the bit accumulator.
-    ///
-    /// Replaces the old `write_all_bytes`. This is always safe: `aligned_writer()`
-    /// guarantees the accumulator is empty before returning the raw writer,
-    /// so no buffered bits can be corrupted — the root cause of the old ANS bugs.
     #[inline]
     pub fn write_aligned_bytes(&mut self, bytes: &[u8]) -> Result<()> {
         self.inner
@@ -132,23 +76,19 @@ impl<W: Write> BitStreamWriter<W> {
     pub fn flush(&mut self) -> Result<()> {
         self.inner.flush().map_err(Error::from)
     }
-
-    /// Consume the writer and return the underlying `Write`.
-    #[inline]
-    pub fn into_inner(self) -> W {
-        self.inner.into_writer()
-    }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Reader
-// ─────────────────────────────────────────────────────────────────────────────
-
-pub struct BitStreamReader<R: Read> {
+pub struct BitStreamReader<R>
+where
+    R: Read,
+{
     inner: BitReader<R, BigEndian>,
 }
 
-impl<R: Read> BitStreamReader<R> {
+impl<R> BitStreamReader<R>
+where
+    R: Read,
+{
     pub fn new(reader: R) -> Self {
         Self {
             inner: BitReader::endian(reader, BigEndian),
@@ -156,10 +96,8 @@ impl<R: Read> BitStreamReader<R> {
     }
 
     /// Read `T` using its full bit-width. Returns `None` at EOF.
-    ///
-    /// Replaces the old `stream.read::<T>()`.
     #[inline]
-    pub fn read_val<T>(&mut self) -> Result<Option<T>>
+    pub fn read<T>(&mut self) -> Result<Option<T>>
     where
         T: bitstream_io::Integer,
     {
@@ -172,10 +110,8 @@ impl<R: Read> BitStreamReader<R> {
     }
 
     /// Read `bits` bits into `T` (runtime width). Returns `None` at EOF.
-    ///
-    /// Replaces the old `read_bits(len)`.
     #[inline]
-    pub fn read_val_bits<T>(&mut self, bits: u32) -> Result<Option<T>>
+    pub fn read_bits<T>(&mut self, bits: u32) -> Result<Option<T>>
     where
         T: bitstream_io::Integer,
     {
@@ -197,21 +133,16 @@ impl<R: Read> BitStreamReader<R> {
     }
 
     /// Read `n` bytes through the bit layer into a `Vec`.
-    ///
-    /// Replaces `read_slice`.
     #[inline]
-    pub fn read_vec(&mut self, n: usize) -> Result<Vec<u8>> {
+    pub fn read_to_vec(&mut self, n: usize) -> Result<Vec<u8>> {
         let mut buf = vec![0u8; n];
         self.inner.read_bytes(&mut buf).map_err(Error::from)?;
         Ok(buf)
     }
 
     /// Read exactly `N` bytes through the bit layer into a stack array.
-    ///
-    /// Replaces `read_array`. Correct at any alignment — uses
-    /// `BitRead::read_bytes` internally.
     #[inline]
-    pub fn read_array<const N: usize>(&mut self) -> Result<[u8; N]> {
+    pub fn read_exact<const N: usize>(&mut self) -> Result<[u8; N]> {
         let mut buf = [0u8; N];
         self.inner.read_bytes(&mut buf).map_err(Error::from)?;
         Ok(buf)
@@ -250,75 +181,7 @@ impl<R: Read> BitStreamReader<R> {
             .map(|n| n as usize)
             .map_err(Error::from)
     }
-
-    /// Consume the reader and return the underlying `Read`.
-    #[inline]
-    pub fn into_inner(self) -> R {
-        self.inner.into_reader()
-    }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Backwards-compat shims — keep old names compiling during migration.
-// Each is a thin delegation. Remove once all call sites are updated.
-// ─────────────────────────────────────────────────────────────────────────────
-
-impl<W: Write> BitStreamWriter<W> {
-    #[inline]
-    #[deprecated(note = "rename to write_val")]
-    pub fn write<T: bitstream_io::Integer>(&mut self, val: T) -> Result<()> {
-        self.write_val(val)
-    }
-
-    #[inline]
-    #[deprecated(note = "rename to write_bytes")]
-    pub fn write_slice(&mut self, bytes: &[u8]) -> Result<()> {
-        self.write_bytes(bytes)
-    }
-
-    #[inline]
-    #[deprecated(note = "rename to write_aligned_bytes")]
-    pub fn write_all_bytes(&mut self, bytes: &[u8]) -> Result<()> {
-        self.write_aligned_bytes(bytes)
-    }
-
-    /// Old write_bits had (value, len) arg order. New write_val_bits has (bits, value).
-    /// This shim preserves the old order to ease migration.
-    #[inline]
-    #[deprecated(note = "use write_val_bits(bits, value) — note reversed arg order")]
-    pub fn write_bits_compat<T: bitstream_io::Integer>(
-        &mut self,
-        value: T,
-        bits: u32,
-    ) -> Result<()> {
-        self.write_val_bits(bits, value)
-    }
-}
-
-impl<R: Read> BitStreamReader<R> {
-    #[inline]
-    #[deprecated(note = "rename to read_val")]
-    pub fn read<T: bitstream_io::Integer>(&mut self) -> Result<Option<T>> {
-        self.read_val()
-    }
-
-    #[inline]
-    #[deprecated(note = "rename to read_vec")]
-    pub fn read_slice(&mut self, n: usize) -> Result<Vec<u8>> {
-        self.read_vec(n)
-    }
-
-    /// Old read_bits returned Option<u128>. This shim keeps that shape.
-    #[inline]
-    #[deprecated(note = "use read_val_bits::<T>(bits) with explicit type")]
-    pub fn read_bits(&mut self, bits: u32) -> Result<Option<u128>> {
-        self.read_val_bits::<u128>(bits)
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Tests
-// ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -326,16 +189,37 @@ mod tests {
 
     use super::*;
 
+    impl<W> BitStreamWriter<W>
+    where
+        W: Write,
+    {
+        /// Consume the writer and return the underlying `Write`.
+        #[inline]
+        pub fn into_inner(self) -> W {
+            self.inner.into_writer()
+        }
+    }
+
+    impl<R> BitStreamReader<R>
+    where
+        R: Read,
+    {
+        /// Consume the reader and return the underlying `Read`.
+        #[inline]
+        pub fn into_inner(self) -> R {
+            self.inner.into_reader()
+        }
+    }
+
     #[test]
     fn roundtrip_u32() {
         for val in [0u32, 1, 0x12345678, u32::MAX] {
             let mut buf = Vec::new();
             let mut w = BitStreamWriter::new(&mut buf);
-            w.write_val(val).unwrap();
+            w.write(val).unwrap();
             w.flush().unwrap();
-            drop(w);
             let mut r = BitStreamReader::new(Cursor::new(&buf));
-            assert_eq!(r.read_val::<u32>().unwrap(), Some(val));
+            assert_eq!(r.read::<u32>().unwrap(), Some(val));
         }
     }
 
@@ -346,17 +230,16 @@ mod tests {
         w.write_bit(true).unwrap();
         w.write_bit(false).unwrap();
         w.write_bit(true).unwrap();
-        w.write_val(0xABu8).unwrap();
+        w.write(0xABu8).unwrap();
         w.write_bit(false).unwrap();
         w.write_bit(true).unwrap();
         w.flush().unwrap();
-        drop(w);
 
         let mut r = BitStreamReader::new(Cursor::new(&buf));
         assert_eq!(r.read_bit().unwrap(), Some(true));
         assert_eq!(r.read_bit().unwrap(), Some(false));
         assert_eq!(r.read_bit().unwrap(), Some(true));
-        assert_eq!(r.read_val::<u8>().unwrap(), Some(0xAB));
+        assert_eq!(r.read::<u8>().unwrap(), Some(0xAB));
         assert_eq!(r.read_bit().unwrap(), Some(false));
         assert_eq!(r.read_bit().unwrap(), Some(true));
     }
@@ -371,7 +254,6 @@ mod tests {
         // write_aligned_bytes pads the 2 bits then writes raw
         w.write_aligned_bytes(payload).unwrap();
         w.flush().unwrap();
-        drop(w);
 
         let mut r = BitStreamReader::new(Cursor::new(&buf));
         assert_eq!(r.read_bit().unwrap(), Some(true));
@@ -392,7 +274,7 @@ mod tests {
 
         let mut buf = Vec::new();
         let mut w = BitStreamWriter::new(&mut buf);
-        w.write_val(data_len).unwrap();
+        w.write(data_len).unwrap();
         w.align_to_byte().unwrap();
         w.write_aligned_bytes(&state.to_le_bytes()).unwrap();
         let mut word_bytes = Vec::new();
@@ -401,10 +283,9 @@ mod tests {
         }
         w.write_aligned_bytes(&word_bytes).unwrap();
         w.flush().unwrap();
-        drop(w);
 
         let mut r = BitStreamReader::new(Cursor::new(&buf));
-        assert_eq!(r.read_val::<u32>().unwrap(), Some(data_len));
+        assert_eq!(r.read::<u32>().unwrap(), Some(data_len));
         r.align_to_byte().unwrap();
         let got_state = u32::from_le_bytes(r.read_raw_bytes::<4>().unwrap());
         assert_eq!(got_state, state);
@@ -418,9 +299,8 @@ mod tests {
     fn endianness_big_endian() {
         let mut buf = Vec::new();
         let mut w = BitStreamWriter::new(&mut buf);
-        w.write_val(0x12345678u32).unwrap();
+        w.write(0x12345678u32).unwrap();
         w.flush().unwrap();
-        drop(w);
         // BE: MSB first
         assert_eq!(buf, [0x12, 0x34, 0x56, 0x78]);
     }
@@ -434,7 +314,6 @@ mod tests {
         }
         w.write_bit(true).unwrap();
         w.flush().unwrap();
-        drop(w);
         let mut r = BitStreamReader::new(Cursor::new(&buf));
         assert_eq!(r.count_leading_zeros().unwrap(), 5);
     }
@@ -443,7 +322,7 @@ mod tests {
     fn eof_returns_none() {
         let buf: Vec<u8> = Vec::new();
         let mut r = BitStreamReader::new(Cursor::new(&buf));
-        assert_eq!(r.read_val::<u8>().unwrap(), None);
+        assert_eq!(r.read::<u8>().unwrap(), None);
         assert_eq!(r.read_bit().unwrap(), None);
     }
 
@@ -453,24 +332,22 @@ mod tests {
         let mut buf = Vec::new();
         let mut w = BitStreamWriter::new(&mut buf);
         for &v in &vals {
-            w.write_val(v).unwrap();
+            w.write(v).unwrap();
         }
         w.flush().unwrap();
-        drop(w);
         let mut r = BitStreamReader::new(Cursor::new(&buf));
         for &expected in &vals {
-            assert_eq!(r.read_val::<u32>().unwrap(), Some(expected));
+            assert_eq!(r.read::<u32>().unwrap(), Some(expected));
         }
     }
 
     #[test]
-    fn write_val_bits_and_read_val_bits() {
+    fn write_val_bits_and_read_bits() {
         let mut buf = Vec::new();
         let mut w = BitStreamWriter::new(&mut buf);
-        w.write_val_bits(12u32, 0b1010_0011_1100u16).unwrap();
+        w.write_bits(12u32, 0b1010_0011_1100u16).unwrap();
         w.flush().unwrap();
-        drop(w);
         let mut r = BitStreamReader::new(Cursor::new(&buf));
-        assert_eq!(r.read_val_bits::<u16>(12).unwrap(), Some(0b1010_0011_1100));
+        assert_eq!(r.read_bits::<u16>(12).unwrap(), Some(0b1010_0011_1100));
     }
 }

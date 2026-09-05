@@ -2,13 +2,9 @@
 // Separate quantization tables for images (JPEG-style) and video (H.264-style)
 //
 use std::{
-    cmp::PartialOrd,
     fmt::Debug,
     io::{Read, Write},
-    ops::{Div, Mul},
 };
-
-use num_traits::{Bounded, NumCast};
 
 use super::Block;
 use crate::{BitStreamReader, BitStreamWriter, Decodable, Encodable, Result};
@@ -88,30 +84,6 @@ const IMAGE_CHROMINANCE_QUANTIZATION_I32: Block<i32> = Block([
     99, 99, 99, 99, 99, 99, 99, 99,
 ]);
 
-#[rustfmt::skip]
-const VIDEO_LUMINANCE_QUANTIZATION_I32: Block<i32> = Block([
-    6,  5,  4,  6,  10, 16, 20, 24,
-    5,  5,  6,  8,  10, 22, 24, 22,
-    6,  6,  7,  10, 16, 22, 28, 22,
-    6,  7,  9,  12, 20, 34, 32, 24,
-    7,  9,  15, 22, 26, 42, 40, 30,
-    10, 14, 22, 26, 32, 40, 44, 36,
-    20, 26, 30, 34, 40, 48, 48, 40,
-    28, 36, 38, 38, 44, 40, 40, 38,
-]);
-
-#[rustfmt::skip]
-const VIDEO_CHROMINANCE_QUANTIZATION_I32: Block<i32> = Block([
-    6,  6,  8,  16, 32, 32, 32, 32,
-    6,  7,  9,  22, 32, 32, 32, 32,
-    8,  9,  18, 32, 32, 32, 32, 32,
-    16, 22, 32, 32, 32, 32, 32, 32,
-    32, 32, 32, 32, 32, 32, 32, 32,
-    32, 32, 32, 32, 32, 32, 32, 32,
-    32, 32, 32, 32, 32, 32, 32, 32,
-    32, 32, 32, 32, 32, 32, 32, 32,
-]);
-
 const REASONABLE_CLAMP_MIN_I32: i32 = i32::MIN;
 const REASONABLE_CLAMP_MAX_I32: i32 = i32::MAX;
 
@@ -146,24 +118,12 @@ impl Quantizor<i16> {
 }
 
 impl Quantizor<i32> {
-    pub(crate) fn image_luminance() -> &'static Self {
-        static Q: std::sync::OnceLock<Quantizor<i32>> = std::sync::OnceLock::new();
-        Q.get_or_init(|| Self(IMAGE_LUMINANCE_QUANTIZATION_I32))
+    pub(crate) fn image_luminance() -> Self {
+        Self(IMAGE_LUMINANCE_QUANTIZATION_I32)
     }
 
-    pub(crate) fn image_chrominance() -> &'static Self {
-        static Q: std::sync::OnceLock<Quantizor<i32>> = std::sync::OnceLock::new();
-        Q.get_or_init(|| Self(IMAGE_CHROMINANCE_QUANTIZATION_I32))
-    }
-
-    pub(crate) fn video_luminance() -> &'static Self {
-        static Q: std::sync::OnceLock<Quantizor<i32>> = std::sync::OnceLock::new();
-        Q.get_or_init(|| Self(VIDEO_LUMINANCE_QUANTIZATION_I32))
-    }
-
-    pub(crate) fn video_chrominance() -> &'static Self {
-        static Q: std::sync::OnceLock<Quantizor<i32>> = std::sync::OnceLock::new();
-        Q.get_or_init(|| Self(VIDEO_CHROMINANCE_QUANTIZATION_I32))
+    pub(crate) fn image_chrominance() -> Self {
+        Self(IMAGE_CHROMINANCE_QUANTIZATION_I32)
     }
 
     /// Quantize with clamping to i16 range to ensure values fit for array-based ANS encoding

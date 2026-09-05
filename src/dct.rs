@@ -332,6 +332,7 @@ impl Block<f32> {
     }
 }
 
+#[allow(clippy::module_inception)]
 mod dct {
     use std::f32::consts::SQRT_2;
 

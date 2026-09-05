@@ -27,7 +27,7 @@ where
         let mut remaining = high_bits;
         while remaining > 0 {
             let chunk = remaining.min(64);
-            stream.write_val_bits(chunk, 0u64)?;
+            stream.write_bits(chunk, 0u64)?;
             remaining -= chunk;
         }
     }
@@ -36,7 +36,7 @@ where
 
     // Write the k low bits of x
     if k > 0 {
-        stream.write_val_bits(k as u32, x & ((1 << k) - 1))?;
+        stream.write_bits(k as u32, x & ((1 << k) - 1))?;
     }
 
     Ok(())
@@ -54,7 +54,7 @@ where
     let low_bits: u32 = if k == 0 {
         0
     } else {
-        stream.read_val_bits::<u32>(k as u32)?.unwrap_or(0)
+        stream.read_bits::<u32>(k as u32)?.unwrap_or(0)
     };
 
     let x = (high_bits << k) | low_bits;
@@ -110,9 +110,9 @@ mod tests {
         let mut writer = BitStreamWriter::new(&mut buf);
 
         // Write 3 zeros, 1 one, then 2 bits value=2 (binary 10)
-        writer.write_val_bits(3u32, 0u8).expect("write zeros");
+        writer.write_bits(3u32, 0u8).expect("write zeros");
         writer.write_bit(true).expect("write one");
-        writer.write_val_bits(2u32, 2u8).expect("write two bits");
+        writer.write_bits(2u32, 2u8).expect("write two bits");
         writer.flush().expect("flush");
 
         let mut reader = make_reader(buf);
@@ -122,7 +122,7 @@ mod tests {
         assert_eq!(zero_count, 3);
 
         // Read 2 bits
-        let two_bits = reader.read_val_bits::<u8>(2).expect("read 2 bits");
+        let two_bits = reader.read_bits::<u8>(2).expect("read 2 bits");
         assert_eq!(two_bits, Some(2));
     }
 
