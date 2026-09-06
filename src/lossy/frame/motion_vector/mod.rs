@@ -8,7 +8,6 @@ use crate::{
 };
 
 pub(crate) mod depth16;
-pub(crate) mod depth32;
 
 /// SAD threshold below which sub-pixel refinement is skipped.
 pub(crate) const SUBPIXEL_SAD_THRESHOLD: i16 = 1024;

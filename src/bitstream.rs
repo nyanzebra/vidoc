@@ -4,95 +4,16 @@ use bitstream_io::{BigEndian, BitRead, BitReader, BitWrite, BitWriter};
 
 use crate::{Error, Result};
 
-pub struct BitStreamWriter<W>
+pub struct BitStreamReader<R>(BitReader<R, BigEndian>)
 where
-    W: Write,
-{
-    inner: BitWriter<W, BigEndian>,
-}
-
-impl<W> BitStreamWriter<W>
-where
-    W: Write,
-{
-    pub fn new(writer: W) -> Self {
-        Self {
-            inner: BitWriter::endian(writer, BigEndian),
-        }
-    }
-
-    /// Write `T` using its full bit-width (e.g. `u32` → 32 bits, BE).
-    #[inline]
-    pub fn write<T>(&mut self, val: T) -> Result<()>
-    where
-        T: bitstream_io::Integer,
-    {
-        let bits = (std::mem::size_of::<T>() * 8) as u32;
-        self.inner.write_var(bits, val).map_err(Error::from)
-    }
-
-    /// Write `T` using a runtime-specified number of bits.
-    #[inline]
-    pub fn write_bits<T>(&mut self, bits: u32, val: T) -> Result<()>
-    where
-        T: bitstream_io::Integer,
-    {
-        self.inner.write_var(bits, val).map_err(Error::from)
-    }
-
-    /// Write a single bit.
-    #[inline]
-    pub fn write_bit(&mut self, bit: bool) -> Result<()> {
-        self.inner.write_bit(bit).map_err(Error::from)
-    }
-
-    /// Write a byte slice through the bit layer.
-    ///
-    /// Handles non-aligned position correctly. Replaces the old `write_slice`.
-    #[inline]
-    pub fn write_bytes(&mut self, bytes: &[u8]) -> Result<()> {
-        self.inner.write_bytes(bytes).map_err(Error::from)
-    }
-
-    /// Align to the next byte boundary, then write raw bytes directly to the
-    /// underlying `Write`, bypassing the bit accumulator.
-    #[inline]
-    pub fn write_aligned_bytes(&mut self, bytes: &[u8]) -> Result<()> {
-        self.inner
-            .aligned_writer()
-            .and_then(|w| w.write_all(bytes))
-            .map_err(Error::from)
-    }
-
-    /// Pad to the next byte boundary with zero bits.
-    #[inline]
-    pub fn align_to_byte(&mut self) -> Result<()> {
-        self.inner.byte_align().map_err(Error::from)
-    }
-
-    /// Flush the underlying writer. Does NOT flush partial bits — call
-    /// `align_to_byte()` first if needed.
-    #[inline]
-    pub fn flush(&mut self) -> Result<()> {
-        self.inner.flush().map_err(Error::from)
-    }
-}
-
-pub struct BitStreamReader<R>
-where
-    R: Read,
-{
-    inner: BitReader<R, BigEndian>,
-}
+    R: Read;
 
 impl<R> BitStreamReader<R>
 where
     R: Read,
 {
     pub fn new(reader: R) -> Self {
-        Self {
-            inner: BitReader::endian(reader, BigEndian),
-        }
+        Self(BitReader::endian(reader, BigEndian))
     }
 
     /// Read `T` using its full bit-width. Returns `None` at EOF.
@@ -102,11 +23,24 @@ where
         T: bitstream_io::Integer,
     {
         let bits = (std::mem::size_of::<T>() * 8) as u32;
-        match self.inner.read_var(bits) {
+        match self.0.read_var(bits) {
             Ok(v) => Ok(Some(v)),
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => Ok(None),
             Err(e) => Err(Error::from(e)),
         }
+    }
+
+    /// Read exactly `n` bytes directly from the underlying reader after aligning.
+    ///
+    /// Dynamic-length companion to `read_raw_bytes`. Must only be called after
+    /// `align_to_byte()`. Writes into the provided buffer slice.
+    #[inline]
+    pub fn read_vec_raw(&mut self, n: usize, buf: &mut [u8]) -> Result<()> {
+        debug_assert_eq!(buf.len(), n);
+        self.0
+            .aligned_reader()
+            .read_exact(&mut buf[..n])
+            .map_err(Error::from)
     }
 
     /// Read `bits` bits into `T` (runtime width). Returns `None` at EOF.
@@ -115,7 +49,7 @@ where
     where
         T: bitstream_io::Integer,
     {
-        match self.inner.read_var(bits) {
+        match self.0.read_var(bits) {
             Ok(v) => Ok(Some(v)),
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => Ok(None),
             Err(e) => Err(Error::from(e)),
@@ -125,7 +59,7 @@ where
     /// Read a single bit. Returns `None` at EOF.
     #[inline]
     pub fn read_bit(&mut self) -> Result<Option<bool>> {
-        match self.inner.read_bit() {
+        match self.0.read_bit() {
             Ok(b) => Ok(Some(b)),
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => Ok(None),
             Err(e) => Err(Error::from(e)),
@@ -136,7 +70,7 @@ where
     #[inline]
     pub fn read_to_vec(&mut self, n: usize) -> Result<Vec<u8>> {
         let mut buf = vec![0u8; n];
-        self.inner.read_bytes(&mut buf).map_err(Error::from)?;
+        self.0.read_bytes(&mut buf).map_err(Error::from)?;
         Ok(buf)
     }
 
@@ -144,7 +78,7 @@ where
     #[inline]
     pub fn read_exact<const N: usize>(&mut self) -> Result<[u8; N]> {
         let mut buf = [0u8; N];
-        self.inner.read_bytes(&mut buf).map_err(Error::from)?;
+        self.0.read_bytes(&mut buf).map_err(Error::from)?;
         Ok(buf)
     }
 
@@ -157,7 +91,7 @@ where
     #[inline]
     pub fn read_raw_bytes<const N: usize>(&mut self) -> Result<[u8; N]> {
         let mut buf = [0u8; N];
-        self.inner
+        self.0
             .aligned_reader()
             .read_exact(&mut buf)
             .map_err(Error::from)?;
@@ -167,7 +101,7 @@ where
     /// Discard bits up to the next byte boundary.
     #[inline]
     pub fn align_to_byte(&mut self) -> Result<()> {
-        self.inner.byte_align();
+        self.0.byte_align();
         Ok(())
     }
 
@@ -176,10 +110,79 @@ where
     /// `read_unary::<1>()` counts zeros until it sees a 1 (the stop bit).
     #[inline]
     pub fn count_leading_zeros(&mut self) -> Result<usize> {
-        self.inner
+        self.0
             .read_unary::<1>()
             .map(|n| n as usize)
             .map_err(Error::from)
+    }
+}
+
+pub struct BitStreamWriter<W>(BitWriter<W, BigEndian>)
+where
+    W: Write;
+
+impl<W> BitStreamWriter<W>
+where
+    W: Write,
+{
+    pub fn new(writer: W) -> Self {
+        Self(BitWriter::endian(writer, BigEndian))
+    }
+
+    /// Write `T` using its full bit-width (e.g. `u32` → 32 bits, BE).
+    #[inline]
+    pub fn write<T>(&mut self, val: T) -> Result<()>
+    where
+        T: bitstream_io::Integer,
+    {
+        let bits = (std::mem::size_of::<T>() * 8) as u32;
+        self.0.write_var(bits, val).map_err(Error::from)
+    }
+
+    /// Write `T` using a runtime-specified number of bits.
+    #[inline]
+    pub fn write_bits<T>(&mut self, bits: u32, val: T) -> Result<()>
+    where
+        T: bitstream_io::Integer,
+    {
+        self.0.write_var(bits, val).map_err(Error::from)
+    }
+
+    /// Write a single bit.
+    #[inline]
+    pub fn write_bit(&mut self, bit: bool) -> Result<()> {
+        self.0.write_bit(bit).map_err(Error::from)
+    }
+
+    /// Write a byte slice through the bit layer.
+    ///
+    /// Handles non-aligned position correctly. Replaces the old `write_slice`.
+    #[inline]
+    pub fn write_bytes(&mut self, bytes: &[u8]) -> Result<()> {
+        self.0.write_bytes(bytes).map_err(Error::from)
+    }
+
+    /// Align to the next byte boundary, then write raw bytes directly to the
+    /// underlying `Write`, bypassing the bit accumulator.
+    #[inline]
+    pub fn write_aligned_bytes(&mut self, bytes: &[u8]) -> Result<()> {
+        self.0
+            .aligned_writer()
+            .and_then(|w| w.write_all(bytes))
+            .map_err(Error::from)
+    }
+
+    /// Pad to the next byte boundary with zero bits.
+    #[inline]
+    pub fn align_to_byte(&mut self) -> Result<()> {
+        self.0.byte_align().map_err(Error::from)
+    }
+
+    /// Flush the underlying writer. Does NOT flush partial bits — call
+    /// `align_to_byte()` first if needed.
+    #[inline]
+    pub fn flush(&mut self) -> Result<()> {
+        self.0.flush().map_err(Error::from)
     }
 }
 
@@ -196,7 +199,7 @@ mod tests {
         /// Consume the writer and return the underlying `Write`.
         #[inline]
         pub fn into_inner(self) -> W {
-            self.inner.into_writer()
+            self.0.into_writer()
         }
     }
 
@@ -207,7 +210,7 @@ mod tests {
         /// Consume the reader and return the underlying `Read`.
         #[inline]
         pub fn into_inner(self) -> R {
-            self.inner.into_reader()
+            self.0.into_reader()
         }
     }
 

@@ -20,6 +20,7 @@ pub(crate) fn ldsp_blocks(
         MotionVector { x: 0, y: 0 },
         i16::MAX,
     );
+    // return (best, best_score);
 
     for (dx, dy) in LARGE_DIAMOND {
         let x = point.col as isize + dx;
@@ -41,6 +42,8 @@ pub(crate) fn ldsp_blocks(
         }
     }
 
+    // return (best, best_score);
+
     // Stage 2: Refine with small diamond
     let (best, best_score) = sdsp_blocks(
         current,
@@ -50,6 +53,8 @@ pub(crate) fn ldsp_blocks(
         Some(best),
         Some(best_score),
     );
+
+    return (best, best_score);
 
     // Stage 3: Exhaustive refinement at integer level
     let (best_integer, best_score) =
@@ -226,7 +231,7 @@ pub(crate) fn sum_of_abs_diff_block(
         return i16::MAX;
     }
 
-    current.sum_of_abs_difference_early_exit(&reference[idx as usize], threshold)
+    current.sum_of_abs_difference_early_exit_simd(&reference[idx as usize], threshold)
 }
 
 /// Sum of Absolute Differences for sub-pixel positions (uses interpolation)

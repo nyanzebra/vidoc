@@ -10,7 +10,12 @@ use super::{
     r#macro::{IMacroBlock, IMacroBlocks},
 };
 use crate::{
-    block::{quantization::Quantizor, Block},
+    block::{
+        quantization::{
+            Quantizor, QUANTIZATION_VIDEO_CHROMINANCE_I16, QUANTIZATION_VIDEO_LUMINANCE_I16,
+        },
+        Block,
+    },
     color::Subsampling,
     dimensions::BlockDimensions,
     lossy::{frame::reconstruct_blocks_from_macroblock, SubSampleBlockGroup},
@@ -36,8 +41,8 @@ impl Encodable for IFrame<i16> {
         let cb = self.0.cb();
         let cr = self.0.cr();
 
-        let lumi_quantizor = Quantizor::<i16>::video_luminance();
-        let chroma_quantizor = Quantizor::<i16>::video_chrominance();
+        let lumi_quantizor = QUANTIZATION_VIDEO_LUMINANCE_I16;
+        let chroma_quantizor = QUANTIZATION_VIDEO_CHROMINANCE_I16;
 
         // Encode all the metadata
         dimensions.encode(stream)?;
@@ -133,7 +138,7 @@ impl Decodable for IFrame<i16> {
 
         stream.align_to_byte()?;
 
-        let cr_macros: Vec<IMacroBlock<f32>> = IMacroBlocks::<i16>::decode(stream)?
+        let cr_macros: Vec<IMacroBlock<f32>> = IMacroBlocks::decode(stream)?
             .into_inner()
             .into_par_iter()
             .map(|mb| {

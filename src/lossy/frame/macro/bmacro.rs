@@ -50,13 +50,13 @@ impl From<u8> for Prediction {
     }
 }
 
-pub(crate) struct BMacroBlock<T> {
+pub(crate) struct BMacroBlock {
     pub(crate) location: BlockLocation,
     pub(crate) prediction: Prediction,
-    pub(crate) residuals: Residuals<T>,
+    pub(crate) residuals: Residuals,
 }
 
-impl AssemblableMacroBlock for BMacroBlock<i16> {
+impl AssemblableMacroBlock for BMacroBlock {
     fn location(&self) -> &BlockLocation {
         &self.location
     }
@@ -65,15 +65,12 @@ impl AssemblableMacroBlock for BMacroBlock<i16> {
         self.prediction
     }
 
-    fn residuals(&self) -> &Residuals<i16> {
+    fn residuals(&self) -> &Residuals {
         &self.residuals
     }
 }
 
-impl<const N: usize, T> ToBytes for BMacroBlock<T>
-where
-    T: Debug + num_traits::ToBytes<Bytes = [u8; N]>,
-{
+impl ToBytes for BMacroBlock {
     fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
 
@@ -108,10 +105,7 @@ where
     }
 }
 
-impl<const N: usize, T> FromBytes for BMacroBlock<T>
-where
-    T: Debug + num_traits::FromBytes<Bytes = [u8; N]>,
-{
+impl FromBytes for BMacroBlock {
     fn from_bytes(bytes: &[u8]) -> (Self, usize) {
         let mut offset = 0;
 
@@ -169,22 +163,19 @@ where
     }
 }
 
-pub(crate) struct BMacroBlocks<T>(Vec<BMacroBlock<T>>);
+pub(crate) struct BMacroBlocks(Vec<BMacroBlock>);
 
-impl<T> BMacroBlocks<T> {
-    pub(crate) fn new(blocks: Vec<BMacroBlock<T>>) -> Self {
+impl BMacroBlocks {
+    pub(crate) fn new(blocks: Vec<BMacroBlock>) -> Self {
         Self(blocks)
     }
 
-    pub(crate) fn into_inner(self) -> Vec<BMacroBlock<T>> {
+    pub(crate) fn into_inner(self) -> Vec<BMacroBlock> {
         self.0
     }
 }
 
-impl<const N: usize, T> Decodable for BMacroBlocks<T>
-where
-    T: Debug + num_traits::FromBytes<Bytes = [u8; N]>,
-{
+impl Decodable for BMacroBlocks {
     type Output = Self;
 
     fn decode<R>(stream: &mut BitStreamReader<R>) -> Result<Self>
@@ -195,14 +186,28 @@ where
     }
 }
 
-impl<const N: usize, T> Encodable for BMacroBlocks<T>
-where
-    T: Sync + Debug + num_traits::ToBytes<Bytes = [u8; N]>,
-{
+impl Encodable for BMacroBlocks {
     fn encode<W>(&self, stream: &mut BitStreamWriter<W>) -> Result<()>
     where
         W: Write,
     {
         ans::encode(&self.0, stream)
+    }
+}
+
+pub(crate) struct BMacroBlocksRef<'a>(&'a [BMacroBlock]);
+
+impl<'a> BMacroBlocksRef<'a> {
+    pub(crate) fn new(blocks: &'a [BMacroBlock]) -> Self {
+        Self(blocks)
+    }
+}
+
+impl Encodable for BMacroBlocksRef<'_> {
+    fn encode<W>(&self, stream: &mut BitStreamWriter<W>) -> Result<()>
+    where
+        W: Write,
+    {
+        ans::encode(self.0, stream)
     }
 }

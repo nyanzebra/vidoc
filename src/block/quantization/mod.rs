@@ -87,26 +87,25 @@ const IMAGE_CHROMINANCE_QUANTIZATION_I32: Block<i32> = Block([
 const REASONABLE_CLAMP_MIN_I32: i32 = i32::MIN;
 const REASONABLE_CLAMP_MAX_I32: i32 = i32::MAX;
 
+pub(crate) const QUANTIZATION_IMAGE_LUMINANCE_I16: Quantizor<i16> =
+    Quantizor(IMAGE_LUMINANCE_QUANTIZATION_I16);
+pub(crate) const QUANTIZATION_IMAGE_CHROMINANCE_I16: Quantizor<i16> =
+    Quantizor(IMAGE_CHROMINANCE_QUANTIZATION_I16);
+
+pub(crate) const QUANTIZATION_IMAGE_LUMINANCE_I32: Quantizor<i32> =
+    Quantizor(IMAGE_LUMINANCE_QUANTIZATION_I32);
+pub(crate) const QUANTIZATION_IMAGE_CHROMINANCE_I32: Quantizor<i32> =
+    Quantizor(IMAGE_CHROMINANCE_QUANTIZATION_I32);
+
+pub(crate) const QUANTIZATION_VIDEO_LUMINANCE_I16: Quantizor<i16> =
+    Quantizor(VIDEO_LUMINANCE_QUANTIZATION_I16);
+pub(crate) const QUANTIZATION_VIDEO_CHROMINANCE_I16: Quantizor<i16> =
+    Quantizor(VIDEO_CHROMINANCE_QUANTIZATION_I16);
+
 #[derive(Copy, Clone, Debug)]
 pub struct Quantizor<T>(Block<T>);
 
 impl Quantizor<i16> {
-    pub(crate) const fn image_luminance() -> Self {
-        Self(IMAGE_LUMINANCE_QUANTIZATION_I16)
-    }
-
-    pub(crate) const fn image_chrominance() -> Self {
-        Self(IMAGE_CHROMINANCE_QUANTIZATION_I16)
-    }
-
-    pub(crate) const fn video_luminance() -> Self {
-        Self(VIDEO_LUMINANCE_QUANTIZATION_I16)
-    }
-
-    pub(crate) const fn video_chrominance() -> Self {
-        Self(VIDEO_CHROMINANCE_QUANTIZATION_I16)
-    }
-
     /// Quantize with clamping to i16 range to ensure values fit for array-based ANS encoding
     pub fn quantize(&self, block: Block<i16>) -> Block<i16> {
         (block / self.0).clamp(REASONABLE_CLAMP_MIN_I16, REASONABLE_CLAMP_MAX_I16)
@@ -118,14 +117,6 @@ impl Quantizor<i16> {
 }
 
 impl Quantizor<i32> {
-    pub(crate) fn image_luminance() -> Self {
-        Self(IMAGE_LUMINANCE_QUANTIZATION_I32)
-    }
-
-    pub(crate) fn image_chrominance() -> Self {
-        Self(IMAGE_CHROMINANCE_QUANTIZATION_I32)
-    }
-
     /// Quantize with clamping to i16 range to ensure values fit for array-based ANS encoding
     pub fn quantize(&self, block: Block<i32>) -> Block<i32> {
         (block / self.0).clamp(REASONABLE_CLAMP_MIN_I32, REASONABLE_CLAMP_MAX_I32)
@@ -136,10 +127,7 @@ impl Quantizor<i32> {
     }
 }
 
-impl<const N: usize, T> Encodable for Quantizor<T>
-where
-    T: num_traits::ToBytes<Bytes = [u8; N]>,
-{
+impl Encodable for Quantizor<i16> {
     fn encode<W>(&self, stream: &mut BitStreamWriter<W>) -> Result<()>
     where
         W: Write,
@@ -148,16 +136,33 @@ where
     }
 }
 
-impl<const N: usize, T> Decodable for Quantizor<T>
-where
-    T: Debug + num_traits::FromBytes<Bytes = [u8; N]>,
-{
+impl Encodable for Quantizor<i32> {
+    fn encode<W>(&self, stream: &mut BitStreamWriter<W>) -> Result<()>
+    where
+        W: Write,
+    {
+        self.0.encode(stream)
+    }
+}
+
+impl Decodable for Quantizor<i16> {
     type Output = Self;
 
     fn decode<R>(stream: &mut BitStreamReader<R>) -> Result<Self>
     where
         R: Read,
     {
-        Ok(Self(Block::decode(stream)?))
+        Ok(Self(Block::<i16>::decode(stream)?))
+    }
+}
+
+impl Decodable for Quantizor<i32> {
+    type Output = Self;
+
+    fn decode<R>(stream: &mut BitStreamReader<R>) -> Result<Self>
+    where
+        R: Read,
+    {
+        Ok(Self(Block::<i32>::decode(stream)?))
     }
 }

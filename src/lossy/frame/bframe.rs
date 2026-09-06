@@ -60,11 +60,8 @@ impl Encodable for BFrame<i16> {
     }
 }
 
-impl<const N: usize, T> Decodable for BFrame<T>
-where
-    T: Debug + num_traits::FromBytes<Bytes = [u8; N]>,
-{
-    type Output = BMacroBlocks<T>;
+impl Decodable for BFrame<i16> {
+    type Output = BMacroBlocks;
 
     fn decode<R>(stream: &mut BitStreamReader<R>) -> Result<Self::Output>
     where
@@ -78,12 +75,12 @@ impl BFrame<i16> {
     pub(crate) fn reassemble(
         forward_ref: Option<SubSampleBlockGroupRef<'_, i16>>,
         backward_ref: SubSampleBlockGroupRef<'_, i16>,
-        macro_blocks: &[BMacroBlock<i16>],
+        macro_blocks: &[BMacroBlock],
     ) -> Result<SubSampleBlockGroup<i16>> {
         reassemble_frame(forward_ref, backward_ref, macro_blocks)
     }
 
-    pub(crate) fn get_macroblocks(&self) -> Vec<BMacroBlock<i16>> {
+    pub(crate) fn get_macroblocks(&self) -> Vec<BMacroBlock> {
         let motion_vecs = self.motion_vectors();
         let compressed = compressed_motion_vectors(&motion_vecs, &self.dimensions());
 

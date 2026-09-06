@@ -1,7 +1,4 @@
-use std::{
-    fmt::Debug,
-    io::{Read, Write},
-};
+use std::io::{Read, Write};
 
 use crate::{
     bitstream::{BitStreamReader, BitStreamWriter},
@@ -20,7 +17,7 @@ mod imacro;
 pub(crate) use imacro::{IMacroBlock, IMacroBlocks};
 
 mod pmacro;
-pub(crate) use pmacro::{PMacroBlock, PMacroBlocks};
+pub(crate) use pmacro::{PMacroBlock, PMacroBlocks, PMacroBlocksRef};
 
 /// Trait for macroblocks that can be reassembled into frames.
 /// Implemented by both PMacroBlock and BMacroBlock to provide
@@ -33,19 +30,16 @@ pub(crate) trait AssemblableMacroBlock {
     fn prediction(&self) -> Prediction;
 
     /// Get the residuals (Y, Cb, Cr)
-    fn residuals(&self) -> &Residuals<i16>;
+    fn residuals(&self) -> &Residuals;
 }
 
-pub(crate) struct Residuals<T> {
-    pub(crate) y: Blocks<T>,
-    pub(crate) cb: Blocks<T>,
-    pub(crate) cr: Blocks<T>,
+pub(crate) struct Residuals {
+    pub(crate) y: Blocks<i16>,
+    pub(crate) cb: Blocks<i16>,
+    pub(crate) cr: Blocks<i16>,
 }
 
-impl<const N: usize, T> ToBytes for Residuals<T>
-where
-    T: num_traits::ToBytes<Bytes = [u8; N]>,
-{
+impl ToBytes for Residuals {
     fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = vec![];
 
@@ -57,10 +51,7 @@ where
     }
 }
 
-impl<const N: usize, T> FromBytes for Residuals<T>
-where
-    T: Debug + num_traits::FromBytes<Bytes = [u8; N]>,
-{
+impl FromBytes for Residuals {
     fn from_bytes(bytes: &[u8]) -> (Self, usize)
     where
         Self: Sized,
@@ -76,10 +67,7 @@ where
     }
 }
 
-impl<const N: usize, T> Decodable for Residuals<T>
-where
-    T: Debug + num_traits::FromBytes<Bytes = [u8; N]>,
-{
+impl Decodable for Residuals {
     type Output = Self;
 
     fn decode<R>(stream: &mut BitStreamReader<R>) -> Result<Self::Output>
@@ -94,21 +82,21 @@ where
             .read::<u32>()?
             .ok_or(Error::FailedToDecode("y len".to_owned()))? as usize;
         for _ in 0..len {
-            y.push(Block::<T>::decode(stream)?);
+            y.push(Block::<i16>::decode(stream)?);
         }
 
         let len = stream
             .read::<u32>()?
             .ok_or(Error::FailedToDecode("cb len".to_owned()))? as usize;
         for _ in 0..len {
-            cb.push(Block::<T>::decode(stream)?);
+            cb.push(Block::<i16>::decode(stream)?);
         }
 
         let len = stream
             .read::<u32>()?
             .ok_or(Error::FailedToDecode("cr len".to_owned()))? as usize;
         for _ in 0..len {
-            cr.push(Block::<T>::decode(stream)?);
+            cr.push(Block::<i16>::decode(stream)?);
         }
 
         Ok(Self {
@@ -119,10 +107,7 @@ where
     }
 }
 
-impl<const N: usize, T> Encodable for Residuals<T>
-where
-    T: num_traits::ToBytes<Bytes = [u8; N]>,
-{
+impl Encodable for Residuals {
     fn encode<W>(&self, stream: &mut BitStreamWriter<W>) -> Result<()>
     where
         W: Write,

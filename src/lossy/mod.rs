@@ -395,15 +395,15 @@ where
 
     // Reconstruct Y blocks in parallel
     {
-        let blocks_per_row = width.div_ceil(Block::<T>::cols());
-        ys.par_chunks_mut(width * Block::<T>::rows())
+        let blocks_per_row = width.div_ceil(Block::<i16>::cols());
+        ys.par_chunks_mut(width * Block::<i16>::rows())
             .enumerate()
             .for_each(|(block_row, row_chunk)| {
-                let r = block_row * Block::<T>::rows();
+                let r = block_row * Block::<i16>::rows();
                 for block_col in 0..blocks_per_row {
                     let block_idx = block_row * blocks_per_row + block_col;
                     if block_idx < y_blocks.len() {
-                        let c = block_col * Block::<T>::cols();
+                        let c = block_col * Block::<i16>::cols();
                         let y_block = &y_blocks[block_idx];
                         break_block(row_chunk, y_block, r, c, width);
                     }
@@ -413,15 +413,15 @@ where
 
     // Reconstruct Cb blocks in parallel
     {
-        let blocks_per_row = chroma_width.div_ceil(Block::<T>::cols());
-        cbs.par_chunks_mut(chroma_width * Block::<T>::rows())
+        let blocks_per_row = chroma_width.div_ceil(Block::<i16>::cols());
+        cbs.par_chunks_mut(chroma_width * Block::<i16>::rows())
             .enumerate()
             .for_each(|(block_row, row_chunk)| {
-                let r = block_row * Block::<T>::rows();
+                let r = block_row * Block::<i16>::rows();
                 for block_col in 0..blocks_per_row {
                     let block_idx = block_row * blocks_per_row + block_col;
                     if block_idx < cb_blocks.len() {
-                        let c = block_col * Block::<T>::cols();
+                        let c = block_col * Block::<i16>::cols();
                         let cb_block = &cb_blocks[block_idx];
 
                         break_block(row_chunk, cb_block, r, c, chroma_width);
@@ -432,15 +432,15 @@ where
 
     // Reconstruct Cr blocks in parallel
     {
-        let blocks_per_row = chroma_width.div_ceil(Block::<T>::cols());
-        crs.par_chunks_mut(chroma_width * Block::<T>::rows())
+        let blocks_per_row = chroma_width.div_ceil(Block::<i16>::cols());
+        crs.par_chunks_mut(chroma_width * Block::<i16>::rows())
             .enumerate()
             .for_each(|(block_row, row_chunk)| {
-                let r = block_row * Block::<T>::rows();
+                let r = block_row * Block::<i16>::rows();
                 for block_col in 0..blocks_per_row {
                     let block_idx = block_row * blocks_per_row + block_col;
                     if block_idx < cr_blocks.len() {
-                        let c = block_col * Block::<T>::cols();
+                        let c = block_col * Block::<i16>::cols();
                         let cr_block = &cr_blocks[block_idx];
 
                         break_block(row_chunk, cr_block, r, c, chroma_width);

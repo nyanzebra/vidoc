@@ -4,7 +4,10 @@ use rayon::{iter::ParallelIterator as _, slice::ParallelSlice as _};
 
 use super::Jpg;
 use crate::{
-    block::{quantization::Quantizor, Block},
+    block::{
+        quantization::{QUANTIZATION_IMAGE_CHROMINANCE_I32, QUANTIZATION_IMAGE_LUMINANCE_I32},
+        Block,
+    },
     color::{Subsampling, Ycbcr},
     dimensions::PixelDimensions,
     encoders::ans,
@@ -70,8 +73,8 @@ impl Jpg<'_, Rgb16Ref<'_>> {
             subsample_into_block_ycbcr(dimensions, ycbcr, self.subsampling);
         let SubSampleBlockGroupRef { y, cb, cr, .. } = sub_sample_block_group.as_ref();
 
-        let lumi_quantizor = Quantizor::<i32>::image_luminance();
-        let chroma_quantizor = Quantizor::<i32>::image_chrominance();
+        let lumi_quantizor = QUANTIZATION_IMAGE_LUMINANCE_I32;
+        let chroma_quantizor = QUANTIZATION_IMAGE_CHROMINANCE_I32;
 
         let y_dct: Vec<i32> = y
             .iter()
@@ -131,8 +134,8 @@ impl Jpg<'_, Rgba16Ref<'_>> {
             subsample_into_block_ycbcr(dimensions, ycbcr, self.subsampling);
         let SubSampleBlockGroupRef { y, cb, cr, .. } = sub_sample_block_group.as_ref();
 
-        let lumi_quantizor = Quantizor::<i32>::image_luminance();
-        let chroma_quantizor = Quantizor::<i32>::image_chrominance();
+        let lumi_quantizor = QUANTIZATION_IMAGE_LUMINANCE_I32;
+        let chroma_quantizor = QUANTIZATION_IMAGE_CHROMINANCE_I32;
 
         let y_dct: Vec<i32> = y
             .iter()
@@ -185,8 +188,8 @@ where
     let dimensions = PixelDimensions::decode(stream)?;
     let subsampling = Subsampling::decode(stream)?;
 
-    let lumi_quantizor = Quantizor::<i32>::image_luminance();
-    let chroma_quantizor = Quantizor::<i32>::image_chrominance();
+    let lumi_quantizor = QUANTIZATION_IMAGE_LUMINANCE_I32;
+    let chroma_quantizor = QUANTIZATION_IMAGE_CHROMINANCE_I32;
 
     let y: Vec<Block<f32>> = ans::decode_raw::<SIZE, i32, _>(stream)?
         .par_chunks_exact(Block::<i32>::size())

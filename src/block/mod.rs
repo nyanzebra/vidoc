@@ -5,6 +5,7 @@ use std::{
 };
 
 use num_traits::{Bounded, Signed};
+use wide::i32x4;
 
 use crate::{
     bitstream::{BitStreamReader, BitStreamWriter},
@@ -28,32 +29,68 @@ pub struct Block<T>(pub [T; BLOCK_SIZE]);
 unsafe impl<T> Send for Block<T> where T: Send {}
 unsafe impl<T> Sync for Block<T> where T: Sync {}
 
-impl<const N: usize, T> Decodable for Block<T>
-where
-    T: Debug + num_traits::FromBytes<Bytes = [u8; N]>,
-{
+impl Decodable for Block<i16> {
     type Output = Self;
 
     fn decode<R>(stream: &mut BitStreamReader<R>) -> Result<Self::Output>
     where
         R: std::io::Read,
     {
-        let (block, size) =
-            Block::from_bytes(&stream.read_to_vec(Block::<T>::size() * std::mem::size_of::<T>())?);
-        assert_eq!(size, Block::<T>::size() * std::mem::size_of::<T>());
+        const SIZE: usize = Block::<i16>::size() * std::mem::size_of::<i16>();
+        let (block, size) = Block::<i16>::from_bytes(&stream.read_exact::<SIZE>()?);
+        assert_eq!(size, SIZE);
         Ok(block)
     }
 }
 
-impl<const N: usize, T> Encodable for Block<T>
-where
-    T: num_traits::ToBytes<Bytes = [u8; N]>,
-{
+impl Decodable for Block<i32> {
+    type Output = Self;
+
+    fn decode<R>(stream: &mut BitStreamReader<R>) -> Result<Self::Output>
+    where
+        R: std::io::Read,
+    {
+        const SIZE: usize = Block::<i32>::size() * std::mem::size_of::<i32>();
+        let (block, size) = Block::<i32>::from_bytes(&stream.read_exact::<SIZE>()?);
+        assert_eq!(size, SIZE);
+        Ok(block)
+    }
+}
+
+impl Encodable for Block<i16> {
     fn encode<W>(&self, stream: &mut BitStreamWriter<W>) -> Result<()>
     where
         W: Write,
     {
-        let bytes = self.to_bytes();
+        // Need to maintain BigEndian layout
+        let mut bytes = [0; 128];
+        let mut i = 0;
+        for x in self.0 {
+            for b in x.to_be_bytes() {
+                bytes[i] = b;
+                i += 1;
+            }
+        }
+        stream.write_bytes(&bytes)?;
+
+        Ok(())
+    }
+}
+
+impl Encodable for Block<i32> {
+    fn encode<W>(&self, stream: &mut BitStreamWriter<W>) -> Result<()>
+    where
+        W: Write,
+    {
+        // Need to maintain BigEndian layout
+        let mut bytes = [0; 256];
+        let mut i = 0;
+        for x in self.0 {
+            for b in x.to_be_bytes() {
+                bytes[i] = b;
+                i += 1;
+            }
+        }
         stream.write_bytes(&bytes)?;
 
         Ok(())
@@ -263,7 +300,10 @@ where
     }
 }
 
-impl<T> Block<T> {
+impl<T> Block<T>
+where
+    T: Copy,
+{
     pub(crate) const fn cols() -> usize {
         BLOCK_COLS
     }
@@ -274,6 +314,10 @@ impl<T> Block<T> {
 
     pub(crate) const fn size() -> usize {
         BLOCK_COLS * BLOCK_ROWS
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &T> {
+        self.0.iter()
     }
 
     pub(crate) fn into_iter(self) -> impl Iterator<Item = T> {
@@ -389,29 +433,96 @@ where
     }
 }
 
-impl<const N: usize, T> ToBytes for Block<T>
-where
-    T: num_traits::ToBytes<Bytes = [u8; N]>,
-{
+impl ToBytes for Block<i16> {
     fn to_bytes(&self) -> Vec<u8> {
         self.0.iter().flat_map(|x| x.to_be_bytes()).collect()
     }
 }
 
-impl<const N: usize, T> FromBytes for Block<T>
-where
-    T: Debug + num_traits::FromBytes<Bytes = [u8; N]>,
-{
+impl ToBytes for Block<i32> {
+    fn to_bytes(&self) -> Vec<u8> {
+        self.0.iter().flat_map(|x| x.to_be_bytes()).collect()
+    }
+}
+
+impl FromBytes for Block<i16> {
     fn from_bytes(bytes: &[u8]) -> (Self, usize) {
-        let block_bytes = &bytes[..N * BLOCK_SIZE];
-        let vec: Vec<T> = block_bytes
-            .as_chunks::<N>()
-            .0
-            .iter()
-            .map(|x| T::from_be_bytes(x))
-            .collect();
-        let array: [T; BLOCK_SIZE] = vec.try_into().expect("block size array");
-        (Self(array), N * BLOCK_SIZE)
+        const N: usize = std::mem::size_of::<i16>();
+        const SIZE: usize = N * BLOCK_SIZE;
+        let block_bytes = &bytes[..SIZE];
+        let mut block = [0; BLOCK_SIZE];
+        for (idx, chunk) in block_bytes.as_chunks::<N>().0.iter().enumerate() {
+            block[idx] = i16::from_be_bytes(*chunk);
+        }
+        (Self(block), SIZE)
+    }
+}
+
+impl FromBytes for Block<i32> {
+    fn from_bytes(bytes: &[u8]) -> (Self, usize) {
+        const N: usize = std::mem::size_of::<i32>();
+        const SIZE: usize = N * BLOCK_SIZE;
+        let block_bytes = &bytes[..SIZE];
+        let mut block = [0; BLOCK_SIZE];
+        for (idx, chunk) in block_bytes.as_chunks::<N>().0.iter().enumerate() {
+            block[idx] = i32::from_be_bytes(*chunk);
+        }
+        (Self(block), SIZE)
+    }
+}
+
+impl Block<i16> {
+    /// SIMD SAD with early termination.
+    ///
+    /// Processes 8 i16 pixels at a time using `wide`, accumulating into
+    /// i32 lanes so the absolute differences cannot overflow.
+    ///
+    /// This is specifically for the motion-estimation hot path.
+    #[inline]
+    pub fn sum_of_abs_difference_early_exit_simd(&self, other: &Block<i16>, threshold: i16) -> i16 {
+        // `i16` values can differ by at most 65535, and an 8x8 block can
+        // therefore have a SAD larger than i16::MAX. The codec's current
+        // threshold is small, however, so we can safely saturate the
+        // accumulated result at the threshold.
+        //
+        // We process 4 i16 values per SIMD register by widening them to i32.
+        //
+        // Four i32 lanes × 16 groups = all 64 pixels.
+
+        let threshold_i32 = threshold as i32;
+
+        let mut sum = i32x4::ZERO;
+
+        for idx in (0..64).step_by(4) {
+            let a = i32x4::new([
+                self.0[idx] as i32,
+                self.0[idx + 1] as i32,
+                self.0[idx + 2] as i32,
+                self.0[idx + 3] as i32,
+            ]);
+
+            let b = i32x4::new([
+                other.0[idx] as i32,
+                other.0[idx + 1] as i32,
+                other.0[idx + 2] as i32,
+                other.0[idx + 3] as i32,
+            ]);
+
+            let diff = (a - b).abs();
+            sum += diff;
+
+            // We need a horizontal reduction for the early-exit check.
+            let lanes = sum.to_array();
+
+            if lanes[0] + lanes[1] + lanes[2] + lanes[3] >= threshold_i32 {
+                return threshold;
+            }
+        }
+
+        let lanes = sum.to_array();
+        let total = lanes[0] + lanes[1] + lanes[2] + lanes[3];
+
+        total.min(threshold_i32) as i16
     }
 }
 
@@ -461,12 +572,10 @@ impl<'a, T> Iterator for BlocksIter<'a, T> {
     }
 }
 
-impl<const N: usize, T> ToBytes for Blocks<T>
-where
-    T: num_traits::ToBytes<Bytes = [u8; N]>,
-{
+impl ToBytes for Blocks<i16> {
     fn to_bytes(&self) -> Vec<u8> {
-        let mut res = Vec::with_capacity(size_of::<usize>() + (self.0.len() * Block::<T>::size()));
+        let mut res =
+            Vec::with_capacity(size_of::<usize>() + (self.0.len() * Block::<i16>::size()));
 
         res.extend_from_slice(&self.0.len().to_be_bytes());
         for block in &self.0 {
@@ -476,10 +585,20 @@ where
     }
 }
 
-impl<const N: usize, T> FromBytes for Blocks<T>
-where
-    T: Debug + num_traits::FromBytes<Bytes = [u8; N]>,
-{
+impl ToBytes for Blocks<i32> {
+    fn to_bytes(&self) -> Vec<u8> {
+        let mut res =
+            Vec::with_capacity(size_of::<usize>() + (self.0.len() * Block::<i32>::size()));
+
+        res.extend_from_slice(&self.0.len().to_be_bytes());
+        for block in &self.0 {
+            res.extend(block.to_bytes());
+        }
+        res
+    }
+}
+
+impl FromBytes for Blocks<i16> {
     fn from_bytes(bytes: &[u8]) -> (Self, usize)
     where
         Self: Sized,
@@ -497,7 +616,33 @@ where
         offset += size_of::<usize>();
 
         for _ in 0..len {
-            let (block, size) = Block::<T>::from_bytes(&bytes[offset..]);
+            let (block, size) = Block::<i16>::from_bytes(&bytes[offset..]);
+            blocks.push(block);
+            offset += size;
+        }
+        (Self(blocks), offset)
+    }
+}
+
+impl FromBytes for Blocks<i32> {
+    fn from_bytes(bytes: &[u8]) -> (Self, usize)
+    where
+        Self: Sized,
+    {
+        let mut offset = 0;
+
+        let len = usize::from_be_bytes(
+            bytes[offset..offset + size_of::<usize>()]
+                .try_into()
+                .expect("usize"),
+        );
+
+        let mut blocks = Vec::with_capacity(len);
+
+        offset += size_of::<usize>();
+
+        for _ in 0..len {
+            let (block, size) = Block::<i32>::from_bytes(&bytes[offset..]);
             blocks.push(block);
             offset += size;
         }

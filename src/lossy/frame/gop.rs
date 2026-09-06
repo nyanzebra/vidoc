@@ -10,12 +10,15 @@ use rayon::prelude::*;
 
 use super::{bframe::BFrame, iframe::IFrame, pframe::PFrame};
 use crate::{
-    block::Block,
+    block::{
+        quantization::{QUANTIZATION_VIDEO_CHROMINANCE_I16, QUANTIZATION_VIDEO_LUMINANCE_I16},
+        Block,
+    },
     color::Subsampling,
     dimensions::PixelDimensions,
     lossy::{
         frame::{
-            r#macro::{BMacroBlock, PMacroBlock},
+            r#macro::{BMacroBlock, PMacroBlock, PMacroBlocks, PMacroBlocksRef},
             Kind,
         },
         SubSampleBlockGroup,
@@ -243,7 +246,7 @@ fn encode_anchor_chain(
                     let backward_ref = reconstructed_anchors.last().ok_or(Error::InvalidData)?;
                     let pframe = PFrame::new(frame.clone(), backward_ref.clone());
                     let macroblocks = pframe.get_macroblocks();
-                    pframe.encode(&mut tw)?;
+                    PMacroBlocksRef::new(&macroblocks).encode(&mut tw)?; // encode directly
                     tw.align_to_byte()?;
                     tw.flush()?;
                     let reconstructed = PFrame::reassemble(backward_ref.as_ref(), &macroblocks)?;
@@ -367,8 +370,8 @@ where
 
     let dimensions = frame.dimensions();
     let subsampling = frame.subsampling();
-    let lumi_q = Quantizor::<i16>::video_luminance();
-    let chroma_q = Quantizor::<i16>::video_chrominance();
+    let lumi_q = QUANTIZATION_VIDEO_LUMINANCE_I16;
+    let chroma_q = QUANTIZATION_VIDEO_CHROMINANCE_I16;
 
     dimensions.encode(stream)?;
     lumi_q.encode(stream)?;
@@ -589,8 +592,8 @@ where
 #[allow(clippy::enum_variant_names)]
 enum DecodedFrameData {
     IFrame(SubSampleBlockGroup<f32>),
-    PFrame(Vec<PMacroBlock<i16>>),
-    BFrame(Vec<BMacroBlock<i16>>),
+    PFrame(Vec<PMacroBlock>),
+    BFrame(Vec<BMacroBlock>),
 }
 
 pub struct GroupOfPicturesReader<R>
@@ -803,7 +806,7 @@ where
     /// Frames ready to return to the caller, in display order.
     ready: VecDeque<DecodedFrame>,
     /// B-frames buffered waiting for their forward anchor.
-    pending_bframes: Vec<(usize, Vec<BMacroBlock<i16>>)>,
+    pending_bframes: Vec<(usize, Vec<BMacroBlock>)>,
     last_anchor: Option<SubSampleBlockGroup<i16>>,
     last_iframe: Option<SubSampleBlockGroup<i16>>,
     frame_pos: usize,
@@ -1276,6 +1279,14 @@ mod tests {
             assert_eq!(ordering.frame_kind(idx), exp, "frame {idx}");
         }
         assert_eq!(ordering.frame_kind(12), Kind::I);
+    }
+
+    #[test]
+    fn available_parallelism() {
+        let cpus = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4);
+        println!("{cpus}");
     }
 
     #[test]

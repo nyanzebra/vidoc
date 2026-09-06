@@ -44,12 +44,12 @@ impl Encodable for PFrame<i16> {
 impl PFrame<i16> {
     pub(crate) fn reassemble(
         previous_frame: SubSampleBlockGroupRef<'_, i16>,
-        macro_blocks: &[PMacroBlock<i16>],
+        macro_blocks: &[PMacroBlock],
     ) -> Result<SubSampleBlockGroup<i16>> {
         reassemble_frame(None, previous_frame, macro_blocks)
     }
 
-    pub(crate) fn get_macroblocks(&self) -> Vec<PMacroBlock<i16>> {
+    pub(crate) fn get_macroblocks(&self) -> Vec<PMacroBlock> {
         let motion_vecs = self.motion_vectors(&self.current.dimensions(), self.previous.y());
         let compressed = compressed_motion_vectors(&motion_vecs, &self.current.dimensions());
 
@@ -118,7 +118,7 @@ impl PFrame<i16> {
 }
 
 impl Decodable for PFrame<i16> {
-    type Output = PMacroBlocks<i16>;
+    type Output = PMacroBlocks;
 
     fn decode<R>(stream: &mut BitStreamReader<R>) -> Result<Self::Output>
     where

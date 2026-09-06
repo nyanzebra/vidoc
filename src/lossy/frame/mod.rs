@@ -4,7 +4,10 @@ use std::{
 };
 
 use crate::{
-    block::{quantization::Quantizor, Block, Blocks, REASONABLE_SUM_OF_ABS_DIFF_I16},
+    block::{
+        quantization::{QUANTIZATION_VIDEO_CHROMINANCE_I16, QUANTIZATION_VIDEO_LUMINANCE_I16},
+        Block, Blocks, REASONABLE_SUM_OF_ABS_DIFF_I16,
+    },
     color::Subsampling,
     dimensions::BlockDimensions,
     lossy::{SubSampleBlockGroup, SubSampleBlockGroupRef},
@@ -376,11 +379,11 @@ pub(crate) fn calculate_residuals_for_macroblock(
     predicted_y: &[Block<i16>],
     predicted_cb: &[Block<i16>],
     predicted_cr: &[Block<i16>],
-) -> Residuals<i16> {
+) -> Residuals {
     let BlockLocation { start, end } = location;
 
-    let quantizor_y = Quantizor::<i16>::video_luminance();
-    let quantizor_chroma = Quantizor::<i16>::video_chrominance();
+    let quantizor_y = QUANTIZATION_VIDEO_LUMINANCE_I16;
+    let quantizor_chroma = QUANTIZATION_VIDEO_CHROMINANCE_I16;
 
     let luma_count = (end.row - start.row + 1) * (end.col - start.col + 1);
     let mut y_residuals = Vec::with_capacity(luma_count);
@@ -536,8 +539,8 @@ pub(crate) fn reassemble_frame<MB: r#macro::AssemblableMacroBlock>(
     let mut cb_blocks: Vec<Block<i16>> = base_cb.to_vec();
     let mut cr_blocks: Vec<Block<i16>> = base_cr.to_vec();
 
-    let quantizor = Quantizor::<i16>::video_luminance();
-    let chroma_quantizor = Quantizor::<i16>::video_chrominance();
+    let quantizor = QUANTIZATION_VIDEO_LUMINANCE_I16;
+    let chroma_quantizor = QUANTIZATION_VIDEO_CHROMINANCE_I16;
 
     for mb in macro_blocks.iter() {
         let BlockLocation { start, end } = mb.location();

@@ -1,7 +1,4 @@
-use std::{
-    fmt::Debug,
-    io::{Read, Write},
-};
+use std::io::{Read, Write};
 
 use super::{AssemblableMacroBlock, BlockLocation, Prediction, Residuals};
 use crate::{
@@ -16,13 +13,13 @@ use crate::{
 };
 
 #[repr(C)]
-pub(crate) struct PMacroBlock<T> {
+pub(crate) struct PMacroBlock {
     pub(crate) location: BlockLocation,
     pub(crate) mv: MotionVector,
-    pub(crate) residuals: Residuals<T>,
+    pub(crate) residuals: Residuals,
 }
 
-impl AssemblableMacroBlock for PMacroBlock<i16> {
+impl AssemblableMacroBlock for PMacroBlock {
     fn location(&self) -> &BlockLocation {
         &self.location
     }
@@ -32,15 +29,12 @@ impl AssemblableMacroBlock for PMacroBlock<i16> {
         Prediction::Backward(self.mv)
     }
 
-    fn residuals(&self) -> &Residuals<i16> {
+    fn residuals(&self) -> &Residuals {
         &self.residuals
     }
 }
 
-impl<const N: usize, T> Encodable for PMacroBlock<T>
-where
-    T: Sync + num_traits::ToBytes<Bytes = [u8; N]>,
-{
+impl Encodable for PMacroBlock {
     fn encode<W>(&self, stream: &mut BitStreamWriter<W>) -> Result<()>
     where
         W: Write,
@@ -53,10 +47,7 @@ where
     }
 }
 
-impl<const N: usize, T> Decodable for PMacroBlock<T>
-where
-    T: Debug + num_traits::FromBytes<Bytes = [u8; N]>,
-{
+impl Decodable for PMacroBlock {
     type Output = Self;
 
     fn decode<R>(stream: &mut BitStreamReader<R>) -> Result<Self::Output>
@@ -74,10 +65,7 @@ where
     }
 }
 
-impl<const N: usize, T> ToBytes for PMacroBlock<T>
-where
-    T: num_traits::ToBytes<Bytes = [u8; N]>,
-{
+impl ToBytes for PMacroBlock {
     fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
 
@@ -91,10 +79,7 @@ where
     }
 }
 
-impl<const N: usize, T> FromBytes for PMacroBlock<T>
-where
-    T: Debug + num_traits::FromBytes<Bytes = [u8; N]>,
-{
+impl FromBytes for PMacroBlock {
     fn from_bytes(bytes: &[u8]) -> (Self, usize) {
         let location =
             BlockLocation::try_from(&bytes[0..BLOCK_LOCATION_SIZE]).expect("block location");
@@ -117,22 +102,19 @@ where
     }
 }
 
-pub(crate) struct PMacroBlocks<T>(Vec<PMacroBlock<T>>);
+pub(crate) struct PMacroBlocks(Vec<PMacroBlock>);
 
-impl<T> PMacroBlocks<T> {
-    pub(crate) fn new(blocks: Vec<PMacroBlock<T>>) -> Self {
+impl PMacroBlocks {
+    pub(crate) fn new(blocks: Vec<PMacroBlock>) -> Self {
         Self(blocks)
     }
 
-    pub(crate) fn into_inner(self) -> Vec<PMacroBlock<T>> {
+    pub(crate) fn into_inner(self) -> Vec<PMacroBlock> {
         self.0
     }
 }
 
-impl<const N: usize, T> Decodable for PMacroBlocks<T>
-where
-    T: Debug + num_traits::FromBytes<Bytes = [u8; N]>,
-{
+impl Decodable for PMacroBlocks {
     type Output = Self;
 
     fn decode<R>(stream: &mut BitStreamReader<R>) -> Result<Self::Output>
@@ -143,14 +125,28 @@ where
     }
 }
 
-impl<const N: usize, T> Encodable for PMacroBlocks<T>
-where
-    T: Sync + num_traits::ToBytes<Bytes = [u8; N]>,
-{
+impl Encodable for PMacroBlocks {
     fn encode<W>(&self, stream: &mut BitStreamWriter<W>) -> Result<()>
     where
         W: Write,
     {
         ans::encode(&self.0, stream)
+    }
+}
+
+pub(crate) struct PMacroBlocksRef<'a>(&'a [PMacroBlock]);
+
+impl<'a> PMacroBlocksRef<'a> {
+    pub(crate) fn new(blocks: &'a [PMacroBlock]) -> Self {
+        Self(blocks)
+    }
+}
+
+impl Encodable for PMacroBlocksRef<'_> {
+    fn encode<W>(&self, stream: &mut BitStreamWriter<W>) -> Result<()>
+    where
+        W: Write,
+    {
+        ans::encode(self.0, stream)
     }
 }
