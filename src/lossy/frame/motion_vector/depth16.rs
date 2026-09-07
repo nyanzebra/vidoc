@@ -231,7 +231,7 @@ pub(crate) fn sum_of_abs_diff_block(
         return i16::MAX;
     }
 
-    current.sum_of_abs_difference_early_exit_simd(&reference[idx as usize], threshold)
+    current.sum_of_abs_difference_simd(&reference[idx as usize], threshold)
 }
 
 /// Sum of Absolute Differences for sub-pixel positions (uses interpolation)

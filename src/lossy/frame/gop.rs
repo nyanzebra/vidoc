@@ -18,10 +18,10 @@ use crate::{
     dimensions::PixelDimensions,
     lossy::{
         frame::{
-            r#macro::{BMacroBlock, PMacroBlock, PMacroBlocks, PMacroBlocksRef},
+            r#macro::{BMacroBlock, BMacroBlocksRef, PMacroBlock, PMacroBlocks, PMacroBlocksRef},
             Kind,
         },
-        SubSampleBlockGroup,
+        SubSampleBlockGroup, SubSampleBlockGroupRef,
     },
     BitStreamReader, BitStreamWriter, Decodable, Encodable, Error, Result,
 };
@@ -273,15 +273,14 @@ fn encode_bframes(anchors: &GopAnchors) -> Result<Vec<(usize, Vec<u8>)>> {
     let ordering = anchors.ordering;
     let recon = &anchors.reconstructed;
 
-    frames
-        .par_iter()
-        .enumerate()
-        .filter_map(|(idx, frame)| {
-            if gop_frame_kind(idx, ordering) != Kind::B {
-                return None;
-            }
+    let b_indices: Vec<usize> = (0..frames.len())
+        .filter(|&i| gop_frame_kind(i, ordering) == Kind::B)
+        .collect();
 
-            // Backward anchor: nearest anchor at or before this B-frame.
+    b_indices
+        .par_iter()
+        .map(|&idx| {
+            let frame = &frames[idx];
             let backward_pos = {
                 let mut pos = idx;
                 while pos > 0 && gop_frame_kind(pos, ordering) == Kind::B {
@@ -289,7 +288,6 @@ fn encode_bframes(anchors: &GopAnchors) -> Result<Vec<(usize, Vec<u8>)>> {
                 }
                 pos
             };
-            // Forward anchor: nearest anchor after this B-frame.
             let forward_pos = {
                 let mut pos = idx + 1;
                 while pos < frames.len() && gop_frame_kind(pos, ordering) == Kind::B {
@@ -307,23 +305,34 @@ fn encode_bframes(anchors: &GopAnchors) -> Result<Vec<(usize, Vec<u8>)>> {
             let forward_ref = forward_pos
                 .map(|pos| recon[(pos / ordering.anchor_distance).min(recon.len() - 1)].clone());
 
-            let mut frame_data = Vec::new();
-            let result = (|| -> Result<()> {
-                let mut tw = BitStreamWriter::new(Cursor::new(&mut frame_data));
-                GroupOfPicturesHeader::Frame {
-                    subsampling: frame.subsampling(),
-                    dimensions: frame.dimensions().into(),
-                    kind: Kind::B,
-                }
-                .encode(&mut tw)?;
-                BFrame::new(frame.clone(), forward_ref, backward_ref).encode(&mut tw)?;
-                tw.align_to_byte()?;
-                tw.flush()
-            })();
-
-            Some(result.map(|()| (idx, frame_data)))
+            encoded_bframe(frame, forward_ref, backward_ref).map(|frame_data| (idx, frame_data))
         })
         .collect::<Result<Vec<_>>>()
+}
+
+fn encoded_bframe(
+    frame: &SubSampleBlockGroup<i16>,
+    forward_ref: Option<SubSampleBlockGroup<i16>>,
+    backward_ref: SubSampleBlockGroup<i16>,
+) -> Result<Vec<u8>> {
+    let mut frame_data = vec![];
+    let mut tw = BitStreamWriter::new(Cursor::new(&mut frame_data));
+
+    GroupOfPicturesHeader::Frame {
+        subsampling: frame.subsampling(),
+        dimensions: frame.dimensions().into(),
+        kind: Kind::B,
+    }
+    .encode(&mut tw)?;
+
+    // Compute macroblocks once, encode via ref — no double get_macroblocks()
+    let bframe = BFrame::new(frame.clone(), forward_ref, backward_ref);
+    let macroblocks = bframe.get_macroblocks();
+    BMacroBlocksRef::new(&macroblocks).encode(&mut tw)?;
+
+    tw.align_to_byte()?;
+    tw.flush()?;
+    Ok(frame_data)
 }
 
 /// Write all frames of one GOP to stream in display order.

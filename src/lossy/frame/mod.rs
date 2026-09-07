@@ -1,7 +1,4 @@
-use std::{
-    cmp::{max, PartialOrd},
-    ops::{AddAssign, DivAssign, MulAssign},
-};
+use std::cmp::max;
 
 use crate::{
     block::{
@@ -19,7 +16,6 @@ pub mod gop;
 pub mod iframe;
 
 pub mod r#macro;
-use num_traits::{FromPrimitive, NumCast, Signed, ToPrimitive};
 use r#macro::{BlockLocation, IMacroBlock, Prediction, Residuals};
 
 mod motion_vector;
@@ -83,23 +79,10 @@ const TWO_OUT: [(usize, usize); 5] = [(0, 2), (1, 2), (2, 2), (2, 1), (2, 0)];
 /// ```
 const THREE_OUT: [(usize, usize); 7] = [(0, 3), (1, 3), (2, 3), (3, 3), (3, 2), (3, 1), (3, 0)];
 
-pub(crate) fn build_macro_blocks<T>(
-    blocks: &[Block<T>],
+pub(crate) fn build_macro_blocks(
+    blocks: &[Block<i16>],
     dimensions: BlockDimensions,
-) -> Vec<IMacroBlock<T>>
-where
-    T: Signed
-        + Default
-        + AddAssign
-        + DivAssign
-        + MulAssign
-        + Copy
-        + NumCast
-        + FromPrimitive
-        + PartialOrd
-        + ToPrimitive
-        + 'static,
-{
+) -> Vec<IMacroBlock<i16>> {
     if blocks.is_empty() {
         return vec![];
     }
@@ -120,7 +103,7 @@ where
                 continue;
             }
             let block = blocks[idx];
-            let mut current_macro: IMacroBlock<T> = IMacroBlock {
+            let mut current_macro: IMacroBlock<i16> = IMacroBlock {
                 location: BlockLocation {
                     start: Point { row: r, col: c },
                     end: Point { row: r, col: c },
@@ -185,17 +168,14 @@ where
     res
 }
 
-fn expand_macro_block<T>(
-    blocks: &[Block<T>],
+fn expand_macro_block(
+    blocks: &[Block<i16>],
     dimensions: BlockDimensions,
     location: BlockLocation,
     used_table: &mut [Vec<bool>],
-    macro_blocks: &mut Vec<Block<T>>,
+    macro_blocks: &mut Vec<Block<i16>>,
     expansion: &[(usize, usize)],
-) -> Point
-where
-    T: Signed + Default + AddAssign + Copy + FromPrimitive + PartialOrd,
-{
+) -> Point {
     let BlockDimensions { width, height } = dimensions;
     let mut end = location.end;
     let mut others = vec![];
@@ -215,7 +195,7 @@ where
         }
         let other = blocks[idx];
         let soad = macro_blocks[0].sum_of_abs_difference(&other);
-        if soad <= T::from_i16(REASONABLE_SUM_OF_ABS_DIFF_I16).expect("i16->T") {
+        if soad <= REASONABLE_SUM_OF_ABS_DIFF_I16 {
             others.push((other, (r, c)));
         }
     }

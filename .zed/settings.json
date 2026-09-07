@@ -1,0 +1,44 @@
+{
+  "format_on_save": "on",
+  "inlay_hints": {
+    "enabled": true,
+  },
+  "file_types": {
+    "TOML": ["toml"],
+  },
+  "languages": {
+    "TOML": {
+      "language_servers": ["tombi"],
+      "formatter": {
+        "language_server": {
+          "name": "tombi",
+        },
+      },
+    },
+  },
+  "lsp": {
+    "rust-analyzer": {
+      "initialization_options": {
+        "checkOnSave": true,
+        "check": {
+          "command": "clippy",
+          "workspace": true,
+        },
+        "cargo": {
+          "allTargets": true,
+        },
+        "procMacro": {
+          "enable": true,
+        },
+        "rustfmt": {
+          "extraArgs": ["+nightly"],
+        },
+      },
+    },
+    "tombi": {
+      "binary": {
+        "arguments": ["lsp"],
+      },
+    },
+  },
+}

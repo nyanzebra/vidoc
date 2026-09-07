@@ -23,7 +23,10 @@
 //! The original data length is embedded in the lz4 block header by
 //! compress_prepend_size, so we only need to store the compressed byte count.
 
-use std::io::{Read, Write};
+use std::{
+    cell::RefCell,
+    io::{Read, Write},
+};
 
 use lz4_flex::{compress_prepend_size, decompress_size_prepended};
 
@@ -86,6 +89,10 @@ where
         start += consumed;
     }
     Ok(res)
+}
+
+thread_local! {
+    static SCRATCH: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(4096));
 }
 
 /// Encode a slice of `T` (fixed-size numeric type) by casting to bytes then

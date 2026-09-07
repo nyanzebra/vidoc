@@ -5,7 +5,7 @@ use std::{
 };
 
 use num_traits::{Bounded, Signed};
-use wide::i32x4;
+use wide::{i16x8, i32x4};
 
 use crate::{
     bitstream::{BitStreamReader, BitStreamWriter},
@@ -478,51 +478,95 @@ impl Block<i16> {
     /// i32 lanes so the absolute differences cannot overflow.
     ///
     /// This is specifically for the motion-estimation hot path.
+    // #[inline]
+    // pub fn sum_of_abs_difference_early_exit_simd(&self, other: &Block<i16>, threshold: i16) ->
+    // i16 {     // `i16` values can differ by at most 65535, and an 8x8 block can
+    //     // therefore have a SAD larger than i16::MAX. The codec's current
+    //     // threshold is small, however, so we can safely saturate the
+    //     // accumulated result at the threshold.
+    //     //
+    //     // We process 4 i16 values per SIMD register by widening them to i32.
+    //     //
+    //     // Four i32 lanes × 16 groups = all 64 pixels.
+
+    //     let threshold_i32 = threshold as i32;
+
+    //     let mut sum = i32x4::ZERO;
+
+    //     for idx in (0..64).step_by(4) {
+    //         let a = i32x4::new([
+    //             self.0[idx] as i32,
+    //             self.0[idx + 1] as i32,
+    //             self.0[idx + 2] as i32,
+    //             self.0[idx + 3] as i32,
+    //         ]);
+
+    //         let b = i32x4::new([
+    //             other.0[idx] as i32,
+    //             other.0[idx + 1] as i32,
+    //             other.0[idx + 2] as i32,
+    //             other.0[idx + 3] as i32,
+    //         ]);
+
+    //         let diff = (a - b).abs();
+    //         sum += diff;
+
+    //         // We need a horizontal reduction for the early-exit check.
+    //         let lanes = sum.to_array();
+
+    //         if lanes[0] + lanes[1] + lanes[2] + lanes[3] >= threshold_i32 {
+    //             return threshold;
+    //         }
+    //     }
+
+    //     let lanes = sum.to_array();
+    //     let total = lanes[0] + lanes[1] + lanes[2] + lanes[3];
+
+    //     total.min(threshold_i32) as i16
+    // }
+
     #[inline]
-    pub fn sum_of_abs_difference_early_exit_simd(&self, other: &Block<i16>, threshold: i16) -> i16 {
-        // `i16` values can differ by at most 65535, and an 8x8 block can
-        // therefore have a SAD larger than i16::MAX. The codec's current
-        // threshold is small, however, so we can safely saturate the
-        // accumulated result at the threshold.
-        //
-        // We process 4 i16 values per SIMD register by widening them to i32.
-        //
-        // Four i32 lanes × 16 groups = all 64 pixels.
+    pub fn sum_of_abs_difference_simd(&self, other: &Block<i16>, threshold: i16) -> i16 {
+        let threshold = threshold as i32;
+        let mut sum = 0i32;
 
-        let threshold_i32 = threshold as i32;
+        for row in 0..8 {
+            let offset = row * 8;
 
-        let mut sum = i32x4::ZERO;
-
-        for idx in (0..64).step_by(4) {
-            let a = i32x4::new([
-                self.0[idx] as i32,
-                self.0[idx + 1] as i32,
-                self.0[idx + 2] as i32,
-                self.0[idx + 3] as i32,
+            let a = i16x8::new([
+                self.0[offset],
+                self.0[offset + 1],
+                self.0[offset + 2],
+                self.0[offset + 3],
+                self.0[offset + 4],
+                self.0[offset + 5],
+                self.0[offset + 6],
+                self.0[offset + 7],
             ]);
 
-            let b = i32x4::new([
-                other.0[idx] as i32,
-                other.0[idx + 1] as i32,
-                other.0[idx + 2] as i32,
-                other.0[idx + 3] as i32,
+            let b = i16x8::new([
+                other.0[offset],
+                other.0[offset + 1],
+                other.0[offset + 2],
+                other.0[offset + 3],
+                other.0[offset + 4],
+                other.0[offset + 5],
+                other.0[offset + 6],
+                other.0[offset + 7],
             ]);
 
             let diff = (a - b).abs();
-            sum += diff;
+            let lanes = diff.to_array();
 
-            // We need a horizontal reduction for the early-exit check.
-            let lanes = sum.to_array();
+            sum += lanes.iter().map(|&x| x as i32).sum::<i32>();
 
-            if lanes[0] + lanes[1] + lanes[2] + lanes[3] >= threshold_i32 {
-                return threshold;
+            // Only reduce/check after every second row.
+            if row & 1 == 1 && sum >= threshold {
+                return threshold as i16;
             }
         }
 
-        let lanes = sum.to_array();
-        let total = lanes[0] + lanes[1] + lanes[2] + lanes[3];
-
-        total.min(threshold_i32) as i16
+        sum.min(threshold) as i16
     }
 }
 

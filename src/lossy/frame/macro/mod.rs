@@ -11,7 +11,7 @@ mod block_location;
 pub use block_location::BlockLocation;
 
 mod bmacro;
-pub(crate) use bmacro::{BMacroBlock, BMacroBlocks, Prediction};
+pub(crate) use bmacro::{BMacroBlock, BMacroBlocks, BMacroBlocksRef, Prediction};
 
 mod imacro;
 pub(crate) use imacro::{IMacroBlock, IMacroBlocks};
