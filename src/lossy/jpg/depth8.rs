@@ -8,9 +8,7 @@ use rayon::{iter::ParallelIterator as _, slice::ParallelSlice as _};
 use super::Jpg;
 use crate::{
     block::{
-        quantization::{
-            Quantizor, QUANTIZATION_IMAGE_CHROMINANCE_I16, QUANTIZATION_IMAGE_LUMINANCE_I16,
-        },
+        quantization::{QUANTIZATION_IMAGE_CHROMINANCE_I16, QUANTIZATION_IMAGE_LUMINANCE_I16},
         Block,
     },
     color::{Subsampling, Ycbcr},

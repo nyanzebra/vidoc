@@ -18,10 +18,11 @@ use crate::{
     dimensions::PixelDimensions,
     lossy::{
         frame::{
-            r#macro::{BMacroBlock, BMacroBlocksRef, PMacroBlock, PMacroBlocks, PMacroBlocksRef},
+            build_macro_blocks,
+            r#macro::{BMacroBlock, BMacroBlocksRef, IMacroBlocks, PMacroBlock, PMacroBlocksRef},
             Kind,
         },
-        SubSampleBlockGroup, SubSampleBlockGroupRef,
+        SubSampleBlockGroup,
     },
     BitStreamReader, BitStreamWriter, Decodable, Encodable, Error, Result,
 };
@@ -372,11 +373,6 @@ fn iframe_encode_and_reconstruct<W>(
 where
     W: Write,
 {
-    use crate::{
-        block::{quantization::Quantizor, Block},
-        lossy::frame::{build_macro_blocks, r#macro::IMacroBlocks},
-    };
-
     let dimensions = frame.dimensions();
     let subsampling = frame.subsampling();
     let lumi_q = QUANTIZATION_VIDEO_LUMINANCE_I16;

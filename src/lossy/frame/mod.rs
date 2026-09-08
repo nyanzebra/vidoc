@@ -447,11 +447,13 @@ pub(crate) fn calculate_residuals_for_macroblock(
 
 pub(crate) fn try_compress_motion_vectors(
     dimensions: &BlockDimensions,
-    mvs: &[Vec<(Prediction, i16)>],
+    mvs: &[(Prediction, i16)],
     (row, col): (usize, usize),
     pattern: &[(usize, usize)],
 ) -> BlockLocation {
-    let current_mv = mvs[row][col].0;
+    let width = dimensions.width;
+    let current_mv = mvs[row * width + col].0;
+
     let mut max_row = row;
     let mut max_col = col;
 
@@ -459,18 +461,20 @@ pub(crate) fn try_compress_motion_vectors(
         let target_row = row + dr;
         let target_col = col + dc;
 
-        // Check bounds against both dimensions AND actual mvs vector size
-        if target_row < dimensions.height
-            && target_col < dimensions.width
-            && target_row < mvs.len()
-            && target_col < mvs[target_row].len()
-        {
-            if mvs[target_row][target_col].0 != current_mv {
+        if target_row < dimensions.height && target_col < dimensions.width {
+            let target_idx = target_row * width + target_col;
+
+            if target_idx >= mvs.len() {
+                continue;
+            }
+
+            if mvs[target_idx].0 != current_mv {
                 return BlockLocation {
                     start: Point { row, col },
                     end: Point { row, col },
                 };
             }
+
             max_row = max_row.max(target_row);
             max_col = max_col.max(target_col);
         }
@@ -620,17 +624,19 @@ pub(crate) fn reassemble_frame<MB: r#macro::AssemblableMacroBlock>(
 }
 
 pub(crate) fn compressed_motion_vectors(
-    mvs: &[Vec<(Prediction, i16)>],
+    mvs: &[(Prediction, i16)],
     dimensions: &BlockDimensions,
 ) -> Vec<((Prediction, i16), BlockLocation)> {
     let mut mv_locations = vec![];
-    let mut used_table = UsedTable::new(mvs.len(), mvs[0].len());
+    let mut used_table = UsedTable::new(dimensions.height, dimensions.width);
 
-    for row in 0..mvs.len() {
-        for col in 0..mvs[0].len() {
+    for row in 0..dimensions.height {
+        for col in 0..dimensions.width {
             if used_table.is_used(row, col) {
                 continue;
             }
+
+            let idx = row * dimensions.width + col;
 
             let mut location = BlockLocation {
                 start: Point { row, col },
@@ -638,9 +644,10 @@ pub(crate) fn compressed_motion_vectors(
             };
 
             let new_location = try_compress_motion_vectors(dimensions, mvs, (row, col), &ONE_OUT);
+
             if location == new_location {
-                mv_locations.push((mvs[row][col], location));
-                // Mark the single block as used
+                mv_locations.push((mvs[idx], location));
+
                 used_table.mark_used(row, col);
                 continue;
             }
@@ -648,8 +655,10 @@ pub(crate) fn compressed_motion_vectors(
             location = new_location;
 
             let new_location = try_compress_motion_vectors(dimensions, mvs, (row, col), &TWO_OUT);
+
             if location == new_location {
-                mv_locations.push((mvs[row][col], location));
+                mv_locations.push((mvs[idx], location));
+
                 used_table.mark_area_used(
                     location.start.row,
                     location.start.col,
@@ -661,19 +670,22 @@ pub(crate) fn compressed_motion_vectors(
             }
 
             let new_location = try_compress_motion_vectors(dimensions, mvs, (row, col), &THREE_OUT);
+
             if location == new_location {
-                mv_locations.push((mvs[row][col], location));
-                // Mark all blocks in the location as used
+                mv_locations.push((mvs[idx], location));
+
                 used_table.mark_area_used(
                     location.start.row,
                     location.start.col,
                     location.end.row,
                     location.end.col,
                 );
+
                 continue;
             }
 
-            mv_locations.push((mvs[row][col], location));
+            mv_locations.push((mvs[idx], location));
+
             used_table.mark_area_used(
                 location.start.row,
                 location.start.col,
@@ -836,4 +848,39 @@ fn predicted_block(
             }
         }
     }
+}
+
+#[inline]
+fn compute_mvp(
+    mv_grid: &[MotionVector],
+    dimensions: &BlockDimensions,
+    row: usize,
+    col: usize,
+) -> MotionVector {
+    let width = dimensions.width;
+
+    let left = (col > 0).then(|| mv_grid[row * width + col - 1]);
+    let top = (row > 0).then(|| mv_grid[(row - 1) * width + col]);
+    let top_right = (row > 0 && col + 1 < width).then(|| mv_grid[(row - 1) * width + col + 1]);
+
+    match (left, top, top_right) {
+        (Some(left), Some(top), Some(top_right)) => MotionVector {
+            x: median3(left.x, top.x, top_right.x),
+            y: median3(left.y, top.y, top_right.y),
+        },
+
+        (Some(left), Some(top), None) => MotionVector {
+            x: median3(left.x, top.x, top.x),
+            y: median3(left.y, top.y, top.y),
+        },
+
+        (Some(left), None, _) => left,
+        (None, Some(top), _) => top,
+        (None, None, _) => MotionVector::default(),
+    }
+}
+
+#[inline]
+fn median3(a: isize, b: isize, c: isize) -> isize {
+    a + b + c - a.min(b).min(c) - a.max(b).max(c)
 }

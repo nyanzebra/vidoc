@@ -8,6 +8,7 @@ use crate::{
     lossy::{
         frame::{
             build_predicted_blocks, calculate_residuals_for_macroblock, compressed_motion_vectors,
+            compute_mvp,
             motion_vector::depth16,
             r#macro::{PMacroBlock, PMacroBlocks, Prediction},
             reassemble_frame, MotionVector,
@@ -91,29 +92,31 @@ impl PFrame<i16> {
         &self,
         dimensions: &BlockDimensions,
         channel: &[Block<i16>],
-    ) -> Vec<Vec<(Prediction, i16)>> {
-        (0..dimensions.height)
-            .into_par_iter()
-            .map(|row| {
-                (0..dimensions.width)
-                    .map(|col| {
-                        let idx = row * dimensions.width + col;
-                        if idx < self.current.y().len() && idx < channel.len() {
-                            let current = &self.current.y()[idx];
-                            let (mv, cost) = depth16::ldsp_blocks(
-                                current,
-                                channel,
-                                dimensions,
-                                Point { row, col },
-                            );
-                            (Prediction::Backward(mv), cost)
-                        } else {
-                            (Prediction::Backward(MotionVector { x: 0, y: 0 }), 0)
-                        }
-                    })
-                    .collect()
-            })
-            .collect()
+    ) -> Vec<(Prediction, i16)> // flatten the Vec<Vec> while we're at it
+    {
+        let total = dimensions.height * dimensions.width;
+        let mut mv_grid = vec![MotionVector::default(); total];
+        let mut result = vec![(Prediction::Backward(MotionVector::default()), 0i16); total];
+
+        for row in 0..dimensions.height {
+            for col in 0..dimensions.width {
+                let idx = row * dimensions.width + col;
+                if idx >= self.current.y().len() || idx >= channel.len() {
+                    continue;
+                }
+                let predictor = compute_mvp(&mv_grid, dimensions, row, col);
+                let (mv, cost) = depth16::ldsp_blocks(
+                    &self.current.y()[idx],
+                    channel,
+                    dimensions,
+                    Point { row, col },
+                    predictor,
+                );
+                mv_grid[idx] = mv;
+                result[idx] = (Prediction::Backward(mv), cost);
+            }
+        }
+        result
     }
 }
 
@@ -127,8 +130,6 @@ impl Decodable for PFrame<i16> {
         PMacroBlocks::decode(stream)
     }
 }
-
-impl PFrame<i16> {}
 
 #[cfg(test)]
 mod test {

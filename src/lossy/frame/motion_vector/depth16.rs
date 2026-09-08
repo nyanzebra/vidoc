@@ -9,38 +9,22 @@ pub(crate) fn ldsp_blocks(
     reference: &[Block<i16>],
     dimensions: &BlockDimensions,
     point: Point,
+    predictor: MotionVector,
 ) -> (MotionVector, i16) {
     // Stage 1: Integer-pixel search with large diamond
-    let mut best = MotionVector { x: 0, y: 0 };
-    let mut best_score = sum_of_abs_diff_block(
+    let best = predictor;
+    let best_score = sum_of_abs_diff_block(current, reference, dimensions, point, best, i16::MAX);
+    // return (best, best_score);
+
+    let (best, best_score) = search_for_best_mv(
         current,
         reference,
         dimensions,
         point,
-        MotionVector { x: 0, y: 0 },
-        i16::MAX,
+        &LARGE_DIAMOND,
+        best,
+        best_score,
     );
-    // return (best, best_score);
-
-    for (dx, dy) in LARGE_DIAMOND {
-        let x = point.col as isize + dx;
-        let y = point.row as isize + dy;
-        if x < 0 || y < 0 || x >= dimensions.width as isize || y >= dimensions.height as isize {
-            continue;
-        }
-        let score = sum_of_abs_diff_block(
-            current,
-            reference,
-            dimensions,
-            point,
-            MotionVector { x: dx, y: dy },
-            best_score,
-        );
-        if score < best_score {
-            best = MotionVector { x: dx, y: dy };
-            best_score = score;
-        }
-    }
 
     // return (best, best_score);
 
@@ -50,11 +34,12 @@ pub(crate) fn ldsp_blocks(
         reference,
         dimensions,
         point,
+        predictor,
         Some(best),
         Some(best_score),
     );
 
-    return (best, best_score);
+    // return (best, best_score);
 
     // Stage 3: Exhaustive refinement at integer level
     let (best_integer, best_score) =
@@ -83,41 +68,52 @@ pub(crate) fn sdsp_blocks(
     reference: &[Block<i16>],
     dimensions: &BlockDimensions,
     point: Point,
+    predictor: MotionVector,
     best_mv: Option<MotionVector>,
     best_score: Option<i16>,
 ) -> (MotionVector, i16) {
-    let mut best = best_mv.unwrap_or_default();
-    let mut best_score = best_score.unwrap_or_else(|| {
-        sum_of_abs_diff_block(
-            current,
-            reference,
-            dimensions,
-            point,
-            MotionVector { x: 0, y: 0 },
-            i16::MAX,
-        )
+    let best = best_mv.unwrap_or_default();
+    let best_score = best_score.unwrap_or_else(|| {
+        sum_of_abs_diff_block(current, reference, dimensions, point, predictor, i16::MAX)
     });
 
-    for (dx, dy) in SMALL_DIAMOND {
+    search_for_best_mv(
+        current,
+        reference,
+        dimensions,
+        point,
+        &SMALL_DIAMOND,
+        best,
+        best_score,
+    )
+}
+
+fn search_for_best_mv(
+    current: &Block<i16>,
+    reference: &[Block<i16>],
+    dimensions: &BlockDimensions,
+    point: Point,
+    diamond: &[(isize, isize)],
+    mut best: MotionVector,
+    mut best_score: i16,
+) -> (MotionVector, i16) {
+    for (dx, dy) in diamond {
         let x = point.col as isize + dx;
         let y = point.row as isize + dy;
         if x < 0 || y < 0 || x >= dimensions.width as isize || y >= dimensions.height as isize {
             continue;
         }
-        let score = sum_of_abs_diff_block(
-            current,
-            reference,
-            dimensions,
-            point,
-            MotionVector { x: dx, y: dy },
-            best_score,
-        );
+        let candidate = MotionVector {
+            x: best.x + dx,
+            y: best.y + dy,
+        };
+        let score =
+            sum_of_abs_diff_block(current, reference, dimensions, point, candidate, best_score);
         if score < best_score {
-            best = MotionVector { x: dx, y: dy };
+            best = candidate;
             best_score = score;
         }
     }
-
     (best, best_score)
 }
 
